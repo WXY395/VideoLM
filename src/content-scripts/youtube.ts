@@ -1,60 +1,41 @@
 /**
  * YouTube content script — auto-injected on YouTube watch pages via manifest.json.
  *
- * Responsibilities:
- * 1. Parse ytInitialPlayerResponse from page HTML (CSP-safe, no script injection)
- * 2. Cache the extracted VideoContent
- * 3. Respond to GET_VIDEO_CONTENT and PING messages from service worker
- * 4. Watch for SPA navigation and invalidate cache
+ * This content script ONLY extracts the raw playerResponse data from the page HTML.
+ * The actual caption fetching happens in the background service worker, because
+ * MV3 content script fetch() uses the extension's origin, which YouTube rejects.
+ *
+ * Flow:
+ *   Content script (here): parse HTML → extract playerResponse JSON
+ *   Background service worker: receive playerResponse → fetch captions → build VideoContent
  */
 
-import { extractFullVideoContent } from '@/extractors/youtube-extractor';
-import type { VideoContent } from '@/types';
-
 // ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
-
-let cachedContent: VideoContent | null = null;
-let cachedUrl: string = location.href;
-let extractionPromise: Promise<VideoContent | null> | null = null;
-
-// ---------------------------------------------------------------------------
-// 1. Extract ytInitialPlayerResponse from the page
+// Extract ytInitialPlayerResponse from the page
 // ---------------------------------------------------------------------------
 
 /**
  * Extract ytInitialPlayerResponse by parsing the page's HTML source.
- *
- * YouTube embeds the player response as a JSON object in a <script> tag:
- *   var ytInitialPlayerResponse = {...};
- *
- * This approach avoids:
- * - Inline script injection (blocked by YouTube's Trusted Types CSP)
- * - postMessage bridge (race conditions)
- * - MAIN world scripts (require extra manifest config)
+ * Uses brace-counting to find the complete JSON object.
+ * CSP-safe: no script injection, no DOMParser, no MAIN world access.
  */
 function extractPlayerResponseFromPage(): any {
   try {
-    // Strategy 1: Search script tags for the assignment (with or without 'var')
-    // YouTube uses: ytInitialPlayerResponse = {...};  (no 'var' keyword)
     const scripts = document.querySelectorAll('script');
     for (const script of scripts) {
       const text = script.textContent || '';
       if (!text.includes('ytInitialPlayerResponse')) continue;
 
-      // Find the assignment and extract the JSON object
       const idx = text.indexOf('ytInitialPlayerResponse');
       if (idx === -1) continue;
 
-      // Skip past "ytInitialPlayerResponse = " or "var ytInitialPlayerResponse = "
       const afterName = text.indexOf('=', idx);
       if (afterName === -1) continue;
 
       const jsonStart = text.indexOf('{', afterName);
       if (jsonStart === -1) continue;
 
-      // Find matching closing brace by counting braces
+      // Brace-counting to find matching closing brace
       let depth = 0;
       let jsonEnd = -1;
       for (let i = jsonStart; i < text.length; i++) {
@@ -79,91 +60,54 @@ function extractPlayerResponseFromPage(): any {
   }
 }
 
-let playerResponseData: any = null;
-
 // ---------------------------------------------------------------------------
-// 3. Extraction pipeline
+// State & Caching
 // ---------------------------------------------------------------------------
 
-async function getVideoContent(): Promise<VideoContent | null> {
+let cachedPlayerResponse: any = null;
+let cachedUrl: string = '';
+
+function getPlayerResponse(): any {
   const currentUrl = location.href;
 
-  // Return cached if URL hasn't changed
-  if (cachedContent && cachedUrl === currentUrl) {
-    return cachedContent;
+  if (cachedPlayerResponse && cachedUrl === currentUrl) {
+    return cachedPlayerResponse;
   }
 
-  // Avoid duplicate extractions
-  if (extractionPromise && cachedUrl === currentUrl) {
-    return extractionPromise;
-  }
-
-  // Invalidate stale data
   cachedUrl = currentUrl;
-  playerResponseData = null;
-  cachedContent = null;
-
-  extractionPromise = (async () => {
-    // Extract player response directly from page HTML (CSP-safe)
-    const pr = playerResponseData ?? extractPlayerResponseFromPage();
-    if (!pr) return null;
-
-    playerResponseData = pr; // cache for subsequent calls
-
-    const content = await extractFullVideoContent(pr, currentUrl);
-    cachedContent = content;
-    return content;
-  })();
-
-  const result = await extractionPromise;
-  extractionPromise = null;
-  return result;
+  cachedPlayerResponse = extractPlayerResponseFromPage();
+  return cachedPlayerResponse;
 }
 
 // ---------------------------------------------------------------------------
-// 4. Message listener for GET_VIDEO_CONTENT
+// Message listener
 // ---------------------------------------------------------------------------
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  // PING handler — used by service worker to check if content script is loaded
   if (message.type === 'PING') {
     sendResponse({ type: 'PONG' });
     return false;
   }
 
-  if (message.type !== 'GET_VIDEO_CONTENT') return false;
-
-  // Must return true to indicate async response
-  getVideoContent()
-    .then((content) => {
-      if (content) {
-        sendResponse({ type: 'VIDEO_CONTENT', data: content });
-      } else {
-        // Return diagnostic info to help debug extraction failures
-        const pr = extractPlayerResponseFromPage();
-        const tracks = pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-        sendResponse({
-          type: 'VIDEO_CONTENT',
-          data: null,
-          error: pr
-            ? `Player response found (${pr.videoDetails?.title || 'no title'}), ${tracks?.length ?? 0} caption tracks, but extraction failed (caption fetch may have returned empty)`
-            : 'Could not find ytInitialPlayerResponse in page HTML. Try refreshing the page.',
-        });
-      }
-    })
-    .catch((err) => {
+  if (message.type === 'GET_PLAYER_RESPONSE') {
+    const pr = getPlayerResponse();
+    if (pr) {
+      sendResponse({ type: 'PLAYER_RESPONSE', data: pr });
+    } else {
       sendResponse({
-        type: 'VIDEO_CONTENT',
+        type: 'PLAYER_RESPONSE',
         data: null,
-        error: `Content script error: ${err instanceof Error ? err.message : String(err)}`,
+        error: 'Could not find ytInitialPlayerResponse in page HTML. Try refreshing the page.',
       });
-    });
+    }
+    return false; // synchronous response
+  }
 
-  return true;
+  return false;
 });
 
 // ---------------------------------------------------------------------------
-// 5. SPA navigation watcher (YouTube uses History API)
+// SPA navigation watcher (YouTube uses History API)
 // ---------------------------------------------------------------------------
 
 let lastUrl = location.href;
@@ -171,11 +115,8 @@ let lastUrl = location.href;
 const navigationObserver = new MutationObserver(() => {
   if (location.href !== lastUrl) {
     lastUrl = location.href;
-    // Invalidate cache on navigation
-    cachedContent = null;
+    cachedPlayerResponse = null;
     cachedUrl = '';
-    playerResponseData = null;
-    extractionPromise = null;
   }
 });
 
@@ -184,10 +125,7 @@ navigationObserver.observe(document.documentElement, {
   subtree: true,
 });
 
-// Also listen for popstate (back/forward)
 window.addEventListener('popstate', () => {
-  cachedContent = null;
+  cachedPlayerResponse = null;
   cachedUrl = '';
-  playerResponseData = null;
-  extractionPromise = null;
 });

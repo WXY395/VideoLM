@@ -1,7 +1,7 @@
 import type { MessageType, VideoContent, ImportOptions, ImportMode } from '@/types';
 import { getConfig } from '@/config/dynamic-config';
 import { resolveProvider } from '@/ai/provider-manager';
-import { formatTranscript } from '@/extractors/youtube-extractor';
+import { formatTranscript, extractFullVideoContent } from '@/extractors/youtube-extractor';
 import { addMetadataHeader, type MetadataInput } from '@/processing/rag-optimizer';
 import { checkDuplicateByTitle } from '@/processing/duplicate-detector';
 import { getSettings, saveSettings, incrementUsage, checkQuota } from './usage-tracker';
@@ -163,17 +163,18 @@ chrome.runtime.onMessage.addListener(
   (message: MessageType, sender, sendResponse) => {
     switch (message.type) {
       case 'GET_VIDEO_CONTENT': {
-        // Content script is auto-injected on YouTube via manifest.json.
-        // Wait for it to be ready, then ask for video content.
+        // Flow: content script extracts playerResponse → background fetches captions
+        // Caption fetch MUST happen in the background because MV3 content script
+        // fetch() uses the extension's origin, which YouTube's timedtext API rejects.
         (async () => {
           try {
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (!tab?.id) {
-              sendResponse({ type: 'VIDEO_CONTENT', data: null });
+            if (!tab?.id || !tab.url) {
+              sendResponse({ type: 'VIDEO_CONTENT', data: null, error: 'No active tab' });
               return;
             }
 
-            // Wait for content script to be ready (retries with backoff)
+            // Wait for content script to be ready
             const ready = await waitForContentScript(tab.id);
             if (!ready) {
               sendResponse({
@@ -184,8 +185,20 @@ chrome.runtime.onMessage.addListener(
               return;
             }
 
-            const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_VIDEO_CONTENT' });
-            sendResponse(response);
+            // Step 1: Get raw playerResponse from content script
+            const prResponse = await chrome.tabs.sendMessage(tab.id, { type: 'GET_PLAYER_RESPONSE' });
+            if (!prResponse?.data) {
+              sendResponse({
+                type: 'VIDEO_CONTENT',
+                data: null,
+                error: prResponse?.error || 'Could not extract player response from YouTube page.',
+              });
+              return;
+            }
+
+            // Step 2: Build VideoContent in the background (caption fetch happens here)
+            const content = await extractFullVideoContent(prResponse.data, tab.url);
+            sendResponse({ type: 'VIDEO_CONTENT', data: content });
           } catch (err) {
             sendResponse({ type: 'VIDEO_CONTENT', data: null, error: String(err) });
           }
