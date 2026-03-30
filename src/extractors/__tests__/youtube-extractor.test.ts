@@ -262,10 +262,13 @@ describe('extractFullVideoContent', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns null when no caption tracks are available', async () => {
+  it('returns video info with empty transcript when no caption tracks', async () => {
     const pr = { videoDetails: { videoId: 'abc', title: 'T', author: 'A', lengthSeconds: '60' } };
     const result = await extractFullVideoContent(pr, 'https://www.youtube.com/watch?v=abc');
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result!.title).toBe('T');
+    expect(result!.transcript).toEqual([]);
+    expect(result!.language).toBe('unknown');
   });
 
   it('fetches captions and assembles VideoContent', async () => {

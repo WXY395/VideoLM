@@ -142,12 +142,21 @@ export function App() {
         <>
           <VideoInfo content={content} />
 
-          <ModeSelector value={effectiveMode} onChange={setMode} hasAI={hasAI} />
+          {content.transcript.length === 0 && (
+            <div className="status-message status-message--error">
+              This video has no subtitles available. VideoLM requires subtitles (CC) to extract content.
+              Try a video with the CC icon enabled.
+            </div>
+          )}
+
+          {content.transcript.length > 0 && (
+            <ModeSelector value={effectiveMode} onChange={setMode} hasAI={hasAI} />
+          )}
 
           <ImportButton
             onClick={handleImport}
             loading={importing}
-            disabled={!content}
+            disabled={!content || content.transcript.length === 0}
             remainingImports={remainingImports}
           />
 
