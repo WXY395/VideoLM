@@ -7,30 +7,36 @@ import type { MessageType } from '@/types';
 chrome.runtime.onMessage.addListener(
   (message: MessageType, _sender, sendResponse) => {
     switch (message.type) {
-      case 'EXTRACT_TRANSCRIPT':
+      case 'GET_VIDEO_CONTENT':
         // TODO: Task 2 — programmatic injection via chrome.scripting.executeScript
-        sendResponse({ type: 'TRANSCRIPT_ERROR', error: 'Not yet implemented' });
         break;
 
       case 'IMPORT_TO_NLM':
         // TODO: Task 3 — forward content to NLM content script
-        sendResponse({ type: 'IMPORT_RESULT', result: { success: false, error: 'Not yet implemented', tier: 'free' as const } });
+        sendResponse({ type: 'IMPORT_RESULT', result: { success: false, error: 'Not yet implemented', tier: 1 as const } });
         break;
 
       case 'CHECK_DUPLICATE':
         // TODO: Task 3 — duplicate detection
-        sendResponse({ type: 'DUPLICATE_RESULT', result: { isDuplicate: false } });
         break;
 
       case 'GET_CONFIG':
         // Handled async — return true to keep the message channel open
         import('@/config/dynamic-config').then(({ getConfig }) =>
-          getConfig().then((config) => sendResponse({ type: 'CONFIG_RESULT', config }))
+          getConfig().then((config) => sendResponse({ type: 'CONFIG', data: config }))
         );
         return true; // keep channel open for async response
 
       case 'GET_SETTINGS':
         // TODO: Task 4 — settings management
+        break;
+
+      case 'SAVE_SETTINGS':
+        // TODO: Task 4 — persist settings
+        break;
+
+      case 'PROCESS_AND_IMPORT':
+        // TODO: Task 5 — process video content and import
         break;
 
       default:

@@ -10,65 +10,73 @@ export interface Chapter {
   title: string;
   startTime: number;
   endTime: number;
-  content: string;
+  segments: TranscriptSegment[];
 }
 
 /** Extracted video content ready for processing */
 export interface VideoContent {
   videoId: string;
   title: string;
-  channelName: string;
-  description: string;
+  author: string;
+  platform: 'youtube' | 'tiktok' | 'xiaohongshu';
   transcript: TranscriptSegment[];
-  chapters: Chapter[];
+  chapters?: Chapter[];
   duration: number;
   language: string;
   url: string;
+  metadata: {
+    publishDate: string;
+    viewCount: number;
+    tags: string[];
+  };
 }
 
 /** How content should be imported into NotebookLM */
-export type ImportMode = 'full' | 'summary' | 'chapters' | 'key-points';
+export type ImportMode = 'raw' | 'structured' | 'summary' | 'chapters';
 
 /** Options controlling the import process */
 export interface ImportOptions {
   mode: ImportMode;
-  includeTimestamps: boolean;
-  includeChapters: boolean;
-  targetLanguage?: string;
-  aiProvider?: AIProviderType;
+  translate?: string;
+  notebookId?: string;
 }
+
+/** Import fallback tier (1 = API, 2 = DOM automation, 3 = clipboard) */
+export type ImportTier = 1 | 2 | 3;
 
 /** Result of an import operation */
 export interface ImportResult {
   success: boolean;
-  notebookUrl?: string;
-  sourceTitle?: string;
-  error?: string;
   tier: ImportTier;
+  manual?: boolean;
+  message?: string;
+  error?: string;
 }
-
-/** Tier of import based on content length / processing */
-export type ImportTier = 'free' | 'basic' | 'premium';
 
 /** Dynamic configuration fetched from backend */
 export interface DynamicConfig {
-  nlmSelectors: {
-    addSourceButton: string;
-    pasteArea: string;
-    sourceTypeSelector: string;
-    confirmButton: string;
-  };
-  apiPatterns: {
-    youtubeTranscript: string;
-    notebookLmApi: string;
+  version: string;
+  nlm: {
+    selectors: {
+      addSourceButton: string[];
+      sourceTypeMenu: string[];
+      copiedTextOption: string[];
+      textInput: string[];
+      urlInput: string[];
+      submitButton: string[];
+      notebookList: string[];
+      sourceList: string[];
+    };
+    apiPatterns: {
+      addSource: string;
+      listNotebooks: string;
+    };
   };
   features: {
-    aiSummaryEnabled: boolean;
-    chapterDetectionEnabled: boolean;
-    multiLanguageEnabled: boolean;
-    geminiNanoEnabled: boolean;
+    fetchInterceptEnabled: boolean;
+    domAutomationEnabled: boolean;
+    maxBatchSize: number;
   };
-  version: string;
 }
 
 /** AI provider interface — see src/ai/types.ts for full definition */
@@ -86,35 +94,43 @@ export type AIProviderType = 'gemini-nano' | 'openai' | 'anthropic' | 'none';
 export interface BYOKConfig {
   provider: AIProviderType;
   apiKey: string;
+  model?: string;
 }
 
 /** User-persisted settings */
 export interface UserSettings {
+  tier: 'free' | 'pro';
+  byok?: BYOKConfig;
   defaultMode: ImportMode;
-  includeTimestamps: boolean;
-  includeChapters: boolean;
-  targetLanguage: string;
-  byokConfig?: BYOKConfig;
-  preferGeminiNano: boolean;
+  defaultTranslateLang?: string;
+  monthlyUsage: {
+    imports: number;
+    aiCalls: number;
+    resetDate: string;
+  };
 }
 
 /** Result when checking for duplicate sources in a notebook */
 export interface DuplicateCheckResult {
   isDuplicate: boolean;
-  existingSourceTitle?: string;
-  existingSourceUrl?: string;
+  matchType?: 'exact' | 'fuzzy';
+  existingTitle?: string;
+  suggestion?: string;
 }
 
 /** Union of all message types passed between extension components */
 export type MessageType =
-  | { type: 'EXTRACT_TRANSCRIPT'; videoId: string }
-  | { type: 'TRANSCRIPT_RESULT'; content: VideoContent }
-  | { type: 'TRANSCRIPT_ERROR'; error: string }
-  | { type: 'IMPORT_TO_NLM'; content: VideoContent; options: ImportOptions }
+  | { type: 'GET_VIDEO_CONTENT' }
+  | { type: 'VIDEO_CONTENT'; data: VideoContent }
+  | { type: 'IMPORT_TO_NLM'; content: string; options: ImportOptions }
   | { type: 'IMPORT_RESULT'; result: ImportResult }
-  | { type: 'CHECK_DUPLICATE'; videoId: string }
-  | { type: 'DUPLICATE_RESULT'; result: DuplicateCheckResult }
+  | { type: 'API_FORMAT_CAPTURED'; data: unknown }
+  | { type: 'GET_SOURCE_LIST' }
+  | { type: 'SOURCE_LIST'; data: Array<{ title: string; url?: string }> }
   | { type: 'GET_CONFIG' }
-  | { type: 'CONFIG_RESULT'; config: DynamicConfig }
+  | { type: 'CONFIG'; data: DynamicConfig }
   | { type: 'GET_SETTINGS' }
-  | { type: 'SETTINGS_RESULT'; settings: UserSettings };
+  | { type: 'SETTINGS'; data: UserSettings }
+  | { type: 'SAVE_SETTINGS'; settings: UserSettings }
+  | { type: 'PROCESS_AND_IMPORT'; videoContent: VideoContent; options: ImportOptions }
+  | { type: 'CHECK_DUPLICATE'; videoId: string; videoTitle: string };

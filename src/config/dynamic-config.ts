@@ -6,23 +6,28 @@ const CONFIG_ENDPOINT = '/api/config';
 
 /** Hardcoded fallback when backend is unreachable */
 const DEFAULT_CONFIG: DynamicConfig = {
-  nlmSelectors: {
-    addSourceButton: 'button[aria-label="Add source"]',
-    pasteArea: 'textarea[aria-label="Paste text"]',
-    sourceTypeSelector: '[data-source-type="text"]',
-    confirmButton: 'button[aria-label="Insert"]',
-  },
-  apiPatterns: {
-    youtubeTranscript: 'https://www.youtube.com/api/timedtext',
-    notebookLmApi: 'https://notebooklm.google.com',
+  version: '0.1.0',
+  nlm: {
+    selectors: {
+      addSourceButton: ['button[aria-label="Add source"]', 'button.add-source'],
+      sourceTypeMenu: ['[data-source-type-menu]', '.source-type-menu'],
+      copiedTextOption: ['[data-source-type="text"]', '.copied-text-option'],
+      textInput: ['textarea[aria-label="Paste text"]', '.text-input textarea'],
+      urlInput: ['input[type="url"]', '.url-input input'],
+      submitButton: ['button[aria-label="Insert"]', 'button.submit-source'],
+      notebookList: ['.notebook-list', '[data-notebook-list]'],
+      sourceList: ['.source-list', '[data-source-list]'],
+    },
+    apiPatterns: {
+      addSource: 'https://notebooklm.google.com/api/source',
+      listNotebooks: 'https://notebooklm.google.com/api/notebooks',
+    },
   },
   features: {
-    aiSummaryEnabled: true,
-    chapterDetectionEnabled: true,
-    multiLanguageEnabled: false,
-    geminiNanoEnabled: false,
+    fetchInterceptEnabled: true,
+    domAutomationEnabled: true,
+    maxBatchSize: 10,
   },
-  version: '0.1.0',
 };
 
 interface CachedConfig {
