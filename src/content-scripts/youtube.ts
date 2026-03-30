@@ -36,21 +36,40 @@ let extractionPromise: Promise<VideoContent | null> | null = null;
  */
 function extractPlayerResponseFromPage(): any {
   try {
-    // Strategy 1: Look in existing script tags for the variable assignment
+    // Strategy 1: Search script tags for the assignment (with or without 'var')
+    // YouTube uses: ytInitialPlayerResponse = {...};  (no 'var' keyword)
     const scripts = document.querySelectorAll('script');
     for (const script of scripts) {
       const text = script.textContent || '';
-      const match = text.match(/var\s+ytInitialPlayerResponse\s*=\s*(\{.*?\});/s);
-      if (match) {
-        return JSON.parse(match[1]);
-      }
-    }
+      if (!text.includes('ytInitialPlayerResponse')) continue;
 
-    // Strategy 2: Look for the JSON in the page's raw HTML (for pre-rendered pages)
-    const html = document.documentElement.innerHTML;
-    const htmlMatch = html.match(/ytInitialPlayerResponse\s*=\s*(\{.*?\});\s*(?:var\s|<\/script>)/s);
-    if (htmlMatch) {
-      return JSON.parse(htmlMatch[1]);
+      // Find the assignment and extract the JSON object
+      const idx = text.indexOf('ytInitialPlayerResponse');
+      if (idx === -1) continue;
+
+      // Skip past "ytInitialPlayerResponse = " or "var ytInitialPlayerResponse = "
+      const afterName = text.indexOf('=', idx);
+      if (afterName === -1) continue;
+
+      const jsonStart = text.indexOf('{', afterName);
+      if (jsonStart === -1) continue;
+
+      // Find matching closing brace by counting braces
+      let depth = 0;
+      let jsonEnd = -1;
+      for (let i = jsonStart; i < text.length; i++) {
+        if (text[i] === '{') depth++;
+        else if (text[i] === '}') depth--;
+        if (depth === 0) {
+          jsonEnd = i + 1;
+          break;
+        }
+      }
+
+      if (jsonEnd === -1) continue;
+
+      const jsonStr = text.substring(jsonStart, jsonEnd);
+      return JSON.parse(jsonStr);
     }
 
     return null;
