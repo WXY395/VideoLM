@@ -124,6 +124,12 @@ async function getVideoContent(): Promise<VideoContent | null> {
 // ---------------------------------------------------------------------------
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  // PING handler — used by service worker to check if content script is loaded
+  if (message.type === 'PING') {
+    sendResponse({ type: 'PONG' });
+    return false;
+  }
+
   if (message.type !== 'GET_VIDEO_CONTENT') return false;
 
   // Must return true to indicate async response

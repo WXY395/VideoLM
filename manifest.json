@@ -9,7 +9,8 @@
     "scripting"
   ],
   "host_permissions": [
-    "https://notebooklm.google.com/*"
+    "https://notebooklm.google.com/*",
+    "https://www.youtube.com/*"
   ],
   "background": {
     "service_worker": "src/background/service-worker.ts",
@@ -20,6 +21,11 @@
     "default_title": "VideoLM"
   },
   "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/watch*"],
+      "js": ["src/content-scripts/youtube.ts"],
+      "run_at": "document_idle"
+    },
     {
       "matches": ["https://notebooklm.google.com/*"],
       "js": ["src/content-scripts/notebooklm.ts"],

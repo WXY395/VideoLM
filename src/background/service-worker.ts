@@ -28,18 +28,24 @@ function buildMeta(video: VideoContent): MetadataInput {
 }
 
 /**
- * Inject the YouTube content script into the active tab programmatically.
- * Returns the tab ID or null if injection failed.
+ * Ensure the YouTube content script is loaded in the tab.
+ * The content script is declared in manifest.json and auto-injected on YouTube pages,
+ * but if the user opened the tab before installing the extension, we inject manually.
  */
-async function injectYouTubeContentScript(tabId: number): Promise<boolean> {
+async function ensureYouTubeContentScript(tabId: number): Promise<void> {
   try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ['src/content-scripts/youtube.ts'],
-    });
-    return true;
+    // Try messaging first — if the content script is already loaded, it responds
+    await chrome.tabs.sendMessage(tabId, { type: 'PING' });
   } catch {
-    return false;
+    // Content script not loaded — inject programmatically
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['assets/youtube.ts-loader.js'], // CRXJS bundles to assets/
+      });
+    } catch {
+      // Injection failed — content script may already be loading
+    }
   }
 }
 
@@ -161,7 +167,8 @@ chrome.runtime.onMessage.addListener(
   (message: MessageType, sender, sendResponse) => {
     switch (message.type) {
       case 'GET_VIDEO_CONTENT': {
-        // Programmatically inject YouTube content script into the active tab
+        // Content script is auto-injected on YouTube via manifest.json.
+        // Just query the active tab and ask for video content.
         (async () => {
           try {
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -170,10 +177,12 @@ chrome.runtime.onMessage.addListener(
               return;
             }
 
-            // Inject content script
-            await injectYouTubeContentScript(tab.id);
+            // Ensure content script is loaded (handles pre-install tabs)
+            await ensureYouTubeContentScript(tab.id);
 
-            // Now ask the content script for video content
+            // Small delay to let content script initialize if just injected
+            await new Promise((r) => setTimeout(r, 300));
+
             const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_VIDEO_CONTENT' });
             sendResponse(response);
           } catch {

@@ -56,15 +56,50 @@ function decodeHTMLEntities(str: string): string {
 /**
  * Parse YouTube's XML caption format into TranscriptSegment[].
  * Handles HTML entity decoding and normalises whitespace.
+ *
+ * Uses regex parsing as the primary strategy because YouTube's CSP
+ * (Trusted Types) blocks DOMParser in content scripts on youtube.com.
+ * Falls back to DOMParser in environments where it's available (tests, background).
  */
 export function parseXMLCaptions(xml: string): TranscriptSegment[] {
   if (!xml) return [];
 
+  // Primary: regex parsing (works under Trusted Types CSP)
+  const segments = parseXMLCaptionsRegex(xml);
+  if (segments.length > 0) return segments;
+
+  // Fallback: DOMParser (for tests and non-YouTube environments)
+  return parseXMLCaptionsDom(xml);
+}
+
+/** Regex-based XML caption parser — CSP-safe, works on YouTube pages. */
+function parseXMLCaptionsRegex(xml: string): TranscriptSegment[] {
+  const segments: TranscriptSegment[] = [];
+  const regex = /<text\s+start="([^"]*?)"\s+dur="([^"]*?)"[^>]*>([\s\S]*?)<\/text>/g;
+  let match;
+
+  while ((match = regex.exec(xml)) !== null) {
+    const start = parseFloat(match[1]);
+    const duration = parseFloat(match[2]);
+    let text = match[3];
+
+    text = decodeHTMLEntities(text);
+    text = text.replace(/\n/g, ' ').trim();
+
+    if (text) {
+      segments.push({ text, start, duration });
+    }
+  }
+
+  return segments;
+}
+
+/** DOMParser-based fallback (blocked by Trusted Types on YouTube pages). */
+function parseXMLCaptionsDom(xml: string): TranscriptSegment[] {
   try {
     const parser = new DOMParser();
     const doc = parser.parseFromString(xml, 'text/xml');
 
-    // DOMParser returns a parsererror document for malformed XML
     if (doc.querySelector('parsererror')) return [];
 
     const textNodes = doc.querySelectorAll('text');
@@ -75,7 +110,6 @@ export function parseXMLCaptions(xml: string): TranscriptSegment[] {
       const duration = parseFloat(node.getAttribute('dur') || '0');
       let text = node.textContent || '';
 
-      // Decode HTML entities and normalise whitespace
       text = decodeHTMLEntities(text);
       text = text.replace(/\n/g, ' ').trim();
 

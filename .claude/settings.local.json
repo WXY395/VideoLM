@@ -15,7 +15,8 @@
       "Bash(npx wrangler:*)",
       "mcp__plugin_playwright_playwright__browser_navigate",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "WebFetch(domain:dev.to)"
+      "WebFetch(domain:dev.to)",
+      "mcp__plugin_playwright_playwright__browser_evaluate"
     ]
   }
 }
