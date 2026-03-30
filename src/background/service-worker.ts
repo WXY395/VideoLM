@@ -44,7 +44,6 @@ async function waitForContentScript(tabId: number, maxRetries = 5): Promise<bool
   }
   return false; // Content script never responded
 }
-}
 
 /**
  * Get the source list from the NotebookLM tab by messaging its content script.
