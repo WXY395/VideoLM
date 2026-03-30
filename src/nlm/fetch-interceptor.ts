@@ -64,7 +64,9 @@ export class FetchInterceptor {
   window.fetch = async function(input, init) {
     const url = typeof input === 'string' ? input : (input instanceof Request ? input.url : String(input));
 
-    if (_pattern.test(url) && init) {
+    // Match URL pattern OR check if body contains method ID
+    const bodyStr = typeof init?.body === 'string' ? init.body : '';
+    if ((_pattern.test(url) || _pattern.test(bodyStr)) && init) {
       const headers = {};
       if (init.headers) {
         if (init.headers instanceof Headers) {

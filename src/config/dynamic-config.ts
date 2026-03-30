@@ -4,29 +4,70 @@ const CONFIG_CACHE_KEY = 'videolm_config_cache';
 const CONFIG_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 const CONFIG_ENDPOINT = '/api/config';
 
-/** Hardcoded fallback when backend is unreachable */
+/** Hardcoded fallback when backend is unreachable.
+ *  Real selectors verified from 6 open-source NLM integration projects.
+ *  NLM uses Angular + Angular Material (MDC Web components). */
 const DEFAULT_CONFIG: DynamicConfig = {
-  version: '0.1.0',
+  version: '0.2.0',
   nlm: {
     selectors: {
-      addSourceButton: ['button[aria-label="Add source"]', 'button.add-source'],
-      sourceTypeMenu: ['[data-source-type-menu]', '.source-type-menu'],
-      copiedTextOption: ['[data-source-type="text"]', '.copied-text-option'],
-      textInput: ['textarea[aria-label="Paste text"]', '.text-input textarea'],
-      urlInput: ['input[type="url"]', '.url-input input'],
-      submitButton: ['button[aria-label="Insert"]', 'button.submit-source'],
-      notebookList: ['.notebook-list', '[data-notebook-list]'],
-      sourceList: ['.source-list', '[data-source-list]'],
+      addSourceButton: [
+        'button[aria-label*="Add"]',
+        '.add-source-button',
+        'button[data-tooltip*="Add"]',
+        'button[title*="Add"]',
+      ],
+      sourceTypeMenu: [
+        'mat-dialog-container',
+        'mat-chip-option',
+        '.mdc-evolution-chip',
+        'span.mat-mdc-chip-action',
+      ],
+      copiedTextOption: [
+        'mat-chip-option:has(span.mdc-evolution-chip__text-label)',
+        '.mdc-evolution-chip',
+        'span.mdc-evolution-chip__text-label',
+      ],
+      textInput: [
+        'textarea[formcontrolname="textInput"]',
+        'textarea[formcontrolname="newText"]',
+        'mat-dialog-container textarea',
+        'textarea.mat-mdc-input-element',
+        'textarea[matinput]',
+      ],
+      urlInput: [
+        'textarea[formcontrolname="newUrl"]',
+        'input[type="url"]',
+        'input[placeholder*="URL"]',
+        'textarea[placeholder*="URL"]',
+        'textarea[placeholder*="http"]',
+      ],
+      submitButton: [
+        'button[aria-label="Insert"]',
+        'mat-dialog-actions button.mat-primary',
+        'button.submit-button',
+        'button[mat-flat-button].mat-primary',
+        '.mat-mdc-unelevated-button.mat-primary',
+      ],
+      notebookList: [
+        '.notebook-list-item',
+        '[role="listitem"]',
+      ],
+      sourceList: [
+        'div.single-source-container',
+        '.source-item',
+        '[data-source-id]',
+      ],
     },
     apiPatterns: {
-      addSource: 'https://notebooklm.google.com/api/source',
-      listNotebooks: 'https://notebooklm.google.com/api/notebooks',
+      addSource: 'LabsTailwindUi/data/batchexecute|izAoDd',
+      listNotebooks: 'LabsTailwindUi/data/batchexecute|wXbhsf',
     },
   },
   features: {
     fetchInterceptEnabled: true,
     domAutomationEnabled: true,
-    maxBatchSize: 10,
+    maxBatchSize: 50,
   },
 };
 

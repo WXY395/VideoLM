@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:chromewebstore.google.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:docs.cloud.google.com)",
+      "WebFetch(domain:autocontentapi.com)",
+      "Bash(npm --version)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx vite:*)",
+      "Bash(npx vitest:*)",
+      "Bash(node -e \":*)",
+      "Bash(npx wrangler:*)",
+      "mcp__plugin_playwright_playwright__browser_navigate",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:dev.to)"
+    ]
+  }
+}

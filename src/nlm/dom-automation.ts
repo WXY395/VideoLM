@@ -42,8 +42,11 @@ export class DomAutomation {
     // Wait for the source-type menu to appear
     await this.waitFor(() => this.findElement(this.selectors.sourceTypeMenu) !== null, 3000);
 
-    // Step 2: Click "Copied text"
-    const copiedTextOpt = this.findElement(this.selectors.copiedTextOption);
+    // Step 2: Click "Copied text" chip
+    // NLM uses Angular Material chips with text labels inside
+    // span.mdc-evolution-chip__text-label. Match by text content.
+    const copiedTextOpt = this.findChipByText(['Copied text', '已複製的文字'])
+      ?? this.findElement(this.selectors.copiedTextOption);
     if (!copiedTextOpt) {
       return { success: false, reason: 'Could not find "Copied text" option.' };
     }
@@ -104,6 +107,27 @@ export class DomAutomation {
     }
 
     return sources;
+  }
+
+  /**
+   * Find an Angular Material chip by its text label.
+   * NLM uses mat-chip-option with span.mdc-evolution-chip__text-label.
+   */
+  findChipByText(labels: string[]): Element | null {
+    const chipLabels = document.querySelectorAll(
+      'span.mdc-evolution-chip__text-label, mat-chip .mdc-evolution-chip__text-label',
+    );
+    for (const el of chipLabels) {
+      const text = el.textContent?.trim().toLowerCase() ?? '';
+      for (const label of labels) {
+        if (text === label.toLowerCase()) {
+          // Click the parent chip element, not just the label span
+          const chip = el.closest('mat-chip-option') ?? el.closest('.mdc-evolution-chip') ?? el;
+          if (this.isVisible(chip)) return chip;
+        }
+      }
+    }
+    return null;
   }
 
   /**
@@ -171,9 +195,17 @@ export class DomAutomation {
 
   // ---- Private helpers ----
 
+  /**
+   * Material Design-safe click: mousedown → mouseup → click.
+   * Angular Material components listen to mousedown for ripple effects
+   * and may not register a bare .click() call.
+   */
   private click(el: Element): void {
-    (el as HTMLElement).click();
-    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    const htmlEl = el as HTMLElement;
+    htmlEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    htmlEl.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    htmlEl.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    htmlEl.click(); // Belt-and-suspenders: also call native click
   }
 
   private isVisible(el: Element): boolean {
