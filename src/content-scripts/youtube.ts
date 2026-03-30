@@ -1,13 +1,11 @@
 /**
- * YouTube content script — injected programmatically via chrome.scripting.executeScript()
- * when the user activates the extension on a YouTube page.
+ * YouTube content script — auto-injected on YouTube watch pages via manifest.json.
  *
  * Responsibilities:
- * 1. Inject a page-level script to read window.ytInitialPlayerResponse
- * 2. Listen for the data via postMessage
- * 3. Cache the extracted VideoContent
- * 4. Respond to GET_VIDEO_CONTENT messages from popup / background
- * 5. Watch for SPA navigation and invalidate cache
+ * 1. Parse ytInitialPlayerResponse from page HTML (CSP-safe, no script injection)
+ * 2. Cache the extracted VideoContent
+ * 3. Respond to GET_VIDEO_CONTENT and PING messages from service worker
+ * 4. Watch for SPA navigation and invalidate cache
  */
 
 import { extractFullVideoContent } from '@/extractors/youtube-extractor';
@@ -22,64 +20,47 @@ let cachedUrl: string = location.href;
 let extractionPromise: Promise<VideoContent | null> | null = null;
 
 // ---------------------------------------------------------------------------
-// 1. Inject page-level script to grab ytInitialPlayerResponse
+// 1. Extract ytInitialPlayerResponse from the page
 // ---------------------------------------------------------------------------
 
-function injectPlayerResponseExtractor(): void {
-  const script = document.createElement('script');
-  script.textContent = `
-    (function() {
-      try {
-        if (window.ytInitialPlayerResponse) {
-          window.postMessage({
-            type: '__VIDEOLM_PLAYER_RESPONSE__',
-            data: JSON.parse(JSON.stringify(window.ytInitialPlayerResponse))
-          }, '*');
-        }
-      } catch(e) {
-        console.error('[VideoLM] Failed to extract player response', e);
+/**
+ * Extract ytInitialPlayerResponse by parsing the page's HTML source.
+ *
+ * YouTube embeds the player response as a JSON object in a <script> tag:
+ *   var ytInitialPlayerResponse = {...};
+ *
+ * This approach avoids:
+ * - Inline script injection (blocked by YouTube's Trusted Types CSP)
+ * - postMessage bridge (race conditions)
+ * - MAIN world scripts (require extra manifest config)
+ */
+function extractPlayerResponseFromPage(): any {
+  try {
+    // Strategy 1: Look in existing script tags for the variable assignment
+    const scripts = document.querySelectorAll('script');
+    for (const script of scripts) {
+      const text = script.textContent || '';
+      const match = text.match(/var\s+ytInitialPlayerResponse\s*=\s*(\{.*?\});/s);
+      if (match) {
+        return JSON.parse(match[1]);
       }
-    })();
-  `;
-  document.documentElement.appendChild(script);
-  script.remove();
-}
+    }
 
-// ---------------------------------------------------------------------------
-// 2. Listen for postMessage from injected script
-// ---------------------------------------------------------------------------
+    // Strategy 2: Look for the JSON in the page's raw HTML (for pre-rendered pages)
+    const html = document.documentElement.innerHTML;
+    const htmlMatch = html.match(/ytInitialPlayerResponse\s*=\s*(\{.*?\});\s*(?:var\s|<\/script>)/s);
+    if (htmlMatch) {
+      return JSON.parse(htmlMatch[1]);
+    }
+
+    return null;
+  } catch (e) {
+    console.error('[VideoLM] Failed to parse ytInitialPlayerResponse from page', e);
+    return null;
+  }
+}
 
 let playerResponseData: any = null;
-let playerResponseResolve: ((data: any) => void) | null = null;
-
-function waitForPlayerResponse(): Promise<any> {
-  // If we already have data, return immediately
-  if (playerResponseData) return Promise.resolve(playerResponseData);
-
-  return new Promise((resolve) => {
-    playerResponseResolve = resolve;
-
-    // Timeout after 5 seconds
-    setTimeout(() => {
-      if (playerResponseResolve === resolve) {
-        playerResponseResolve = null;
-        resolve(null);
-      }
-    }, 5000);
-  });
-}
-
-window.addEventListener('message', (event) => {
-  if (event.source !== window) return;
-  if (event.data?.type !== '__VIDEOLM_PLAYER_RESPONSE__') return;
-
-  playerResponseData = event.data.data;
-
-  if (playerResponseResolve) {
-    playerResponseResolve(playerResponseData);
-    playerResponseResolve = null;
-  }
-});
 
 // ---------------------------------------------------------------------------
 // 3. Extraction pipeline
@@ -104,10 +85,11 @@ async function getVideoContent(): Promise<VideoContent | null> {
   cachedContent = null;
 
   extractionPromise = (async () => {
-    // Inject and wait for data
-    injectPlayerResponseExtractor();
-    const pr = await waitForPlayerResponse();
+    // Extract player response directly from page HTML (CSP-safe)
+    const pr = playerResponseData ?? extractPlayerResponseFromPage();
     if (!pr) return null;
+
+    playerResponseData = pr; // cache for subsequent calls
 
     const content = await extractFullVideoContent(pr, currentUrl);
     cachedContent = content;

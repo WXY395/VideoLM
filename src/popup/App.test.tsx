@@ -50,7 +50,7 @@ describe('App', () => {
     render(<App />);
 
     // Wait for the error to appear
-    const errorText = await screen.findByText('Not a YouTube video page');
+    const errorText = await screen.findByText('Open a YouTube video to use VideoLM');
     expect(errorText).toBeInTheDocument();
   });
 });

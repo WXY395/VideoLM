@@ -21,20 +21,15 @@ export function useVideoContent(): UseVideoContentResult {
 
     async function fetchContent() {
       try {
-        // Step 1: Ask background to inject content script via activeTab
-        await chrome.runtime.sendMessage({ type: 'INJECT_YOUTUBE_SCRIPT' });
-
-        // Step 2: Query the active tab for video content
+        // Check if we're on a YouTube video page first
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (!tab?.id) {
-          throw new Error('No active tab found');
+        if (!tab?.url?.includes('youtube.com/watch')) {
+          throw new Error('Open a YouTube video to use VideoLM');
         }
 
-        if (!tab.url?.includes('youtube.com/watch')) {
-          throw new Error('Not a YouTube video page');
-        }
-
-        const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_VIDEO_CONTENT' });
+        // Send GET_VIDEO_CONTENT to background service worker.
+        // The background handles: content script injection → tab messaging → response.
+        const response = await chrome.runtime.sendMessage({ type: 'GET_VIDEO_CONTENT' });
 
         if (cancelled) return;
 
