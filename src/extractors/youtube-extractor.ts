@@ -307,18 +307,19 @@ export async function extractFullVideoContent(
   const bestTrack = manualTrack ?? tracks[0];
 
   // 2. Fetch caption XML
-  let xml: string;
+  let segments: TranscriptSegment[] = [];
   try {
     const resp = await fetch(bestTrack.baseUrl);
-    if (!resp.ok) return null;
-    xml = await resp.text();
+    if (resp.ok) {
+      const xml = await resp.text();
+      if (xml) {
+        segments = parseXMLCaptions(xml);
+      }
+    }
   } catch {
-    return null;
+    // Caption fetch failed — continue with empty transcript
+    // The video info (title, chapters, etc.) is still useful
   }
-
-  // 3. Parse
-  const segments = parseXMLCaptions(xml);
-  if (segments.length === 0) return null;
 
   // 4. Metadata & chapters
   const meta = extractVideoMetadata(playerResponse);

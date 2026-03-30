@@ -134,13 +134,30 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type !== 'GET_VIDEO_CONTENT') return false;
 
   // Must return true to indicate async response
-  getVideoContent().then((content) => {
-    if (content) {
-      sendResponse({ type: 'VIDEO_CONTENT', data: content });
-    } else {
-      sendResponse({ type: 'VIDEO_CONTENT', data: null });
-    }
-  });
+  getVideoContent()
+    .then((content) => {
+      if (content) {
+        sendResponse({ type: 'VIDEO_CONTENT', data: content });
+      } else {
+        // Return diagnostic info to help debug extraction failures
+        const pr = extractPlayerResponseFromPage();
+        const tracks = pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+        sendResponse({
+          type: 'VIDEO_CONTENT',
+          data: null,
+          error: pr
+            ? `Player response found (${pr.videoDetails?.title || 'no title'}), ${tracks?.length ?? 0} caption tracks, but extraction failed (caption fetch may have returned empty)`
+            : 'Could not find ytInitialPlayerResponse in page HTML. Try refreshing the page.',
+        });
+      }
+    })
+    .catch((err) => {
+      sendResponse({
+        type: 'VIDEO_CONTENT',
+        data: null,
+        error: `Content script error: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    });
 
   return true;
 });
