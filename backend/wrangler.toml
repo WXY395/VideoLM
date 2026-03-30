@@ -1,0 +1,7 @@
+name = "videolm-api"
+main = "src/index.ts"
+compatibility_date = "2026-03-01"
+
+[vars]
+ANTHROPIC_API_KEY = ""
+OPENAI_API_KEY = ""
