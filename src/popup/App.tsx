@@ -56,25 +56,27 @@ export function App() {
         async (response) => {
           setImporting(false);
 
+          // Always copy URL to clipboard (for fallback manual paste)
+          if (response?.clipboardText) {
+            try { await navigator.clipboard.writeText(response.clipboardText); } catch {}
+          }
+
           if (response?.success) {
-            if (response.clipboardText) {
-              try {
-                await navigator.clipboard.writeText(response.clipboardText);
-              } catch {
-                // Clipboard write may fail
-              }
-            }
             setResult({
               success: true,
-              tier: 3,
-              manual: true,
-              message: response.message,
+              tier: 1,
+              message: response.message || 'Added to NotebookLM!',
             });
           } else {
+            // Even on failure, URL is copied as fallback
+            if (!response?.clipboardText && content.url) {
+              try { await navigator.clipboard.writeText(content.url); } catch {}
+            }
             setResult({
               success: false,
               tier: 3,
-              error: response?.error || 'Import failed.',
+              manual: true,
+              error: response?.error || 'Import failed. URL copied to clipboard.',
             });
           }
         }
