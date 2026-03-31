@@ -139,9 +139,10 @@ async function extractTranscriptTier2(): Promise<TranscriptSegment[]> {
   const wasExpanded = !!document.querySelector('#collapse:not([hidden])');
 
   try {
-    // Check if transcript panel is already open
-    const existingSegments = document.querySelectorAll('ytd-transcript-segment-renderer');
-    if (existingSegments.length > 0) {
+    // Check if transcript panel is already open (modern or legacy)
+    const existingModern = document.querySelectorAll('transcript-segment-view-model');
+    const existingLegacy = document.querySelectorAll('ytd-transcript-segment-renderer');
+    if (existingModern.length > 0 || existingLegacy.length > 0) {
       return readTranscriptSegmentsFromDOM();
     }
 
@@ -185,8 +186,10 @@ async function extractTranscriptTier2(): Promise<TranscriptSegment[]> {
     const segments = await waitForStableSegments(8000);
 
     // Step 4: Close panel + restore description state
-    const closeBtn = document.querySelector(
-      'ytd-engagement-panel-section-list-renderer[target-id*="transcript"] #header button'
+    // Modern panel uses PAmodern_transcript_view, legacy uses engagement-panel-searchable-transcript
+    const closeBtn = (
+      document.querySelector('ytd-engagement-panel-section-list-renderer[target-id="PAmodern_transcript_view"] #header button') ||
+      document.querySelector('ytd-engagement-panel-section-list-renderer[target-id*="transcript"] #header button')
     ) as HTMLElement;
     if (closeBtn) closeBtn.click();
 
@@ -204,9 +207,32 @@ async function extractTranscriptTier2(): Promise<TranscriptSegment[]> {
 }
 
 /**
+ * Selectors for transcript segments. YouTube has two DOM formats:
+ *
+ * Legacy (pre-2026):
+ *   ytd-transcript-segment-renderer
+ *     .segment-timestamp  → "0:42"
+ *     .segment-text       → "caption text"
+ *
+ * Modern (2026+, PAmodern_transcript_view):
+ *   transcript-segment-view-model
+ *     .ytwTranscriptSegmentViewModelTimestamp  → "0:42"
+ *     span.yt-core-attributed-string           → "caption text"
+ */
+const SEGMENT_SELECTORS = [
+  'transcript-segment-view-model',   // Modern (2026+)
+  'ytd-transcript-segment-renderer', // Legacy
+];
+
+function getSegmentSelector(): string {
+  for (const sel of SEGMENT_SELECTORS) {
+    if (document.querySelector(sel)) return sel;
+  }
+  return SEGMENT_SELECTORS[0]; // Default to modern
+}
+
+/**
  * Wait until transcript segments stop appearing (count stabilizes).
- * YouTube loads segments progressively — we need to wait until all are rendered.
- * Returns the segments once the count is stable for 500ms, or on timeout.
  */
 async function waitForStableSegments(timeoutMs = 8000): Promise<TranscriptSegment[]> {
   const startTime = Date.now();
@@ -216,7 +242,10 @@ async function waitForStableSegments(timeoutMs = 8000): Promise<TranscriptSegmen
   while (Date.now() - startTime < timeoutMs) {
     await sleep(300);
 
-    const currentCount = document.querySelectorAll('ytd-transcript-segment-renderer').length;
+    // Check both modern and legacy selectors
+    const currentCount = SEGMENT_SELECTORS.reduce(
+      (sum, sel) => sum + document.querySelectorAll(sel).length, 0
+    );
 
     if (currentCount > 0 && currentCount === lastCount) {
       // Count hasn't changed — check if it's been stable long enough
@@ -243,24 +272,48 @@ async function waitForStableSegments(timeoutMs = 8000): Promise<TranscriptSegmen
 }
 
 function readTranscriptSegmentsFromDOM(): TranscriptSegment[] {
-  const segmentEls = document.querySelectorAll('ytd-transcript-segment-renderer');
   const segments: TranscriptSegment[] = [];
 
-  segmentEls.forEach((el) => {
+  // Try modern format first (2026+)
+  const modernEls = document.querySelectorAll('transcript-segment-view-model');
+  if (modernEls.length > 0) {
+    modernEls.forEach((el) => {
+      const timestamp = (
+        el.querySelector('.ytwTranscriptSegmentViewModelTimestamp') as HTMLElement
+      )?.textContent?.trim() || '';
+      const text = (
+        el.querySelector('span.yt-core-attributed-string') as HTMLElement
+      )?.textContent?.trim() || '';
+
+      const start = parseTimestamp(timestamp);
+      if (text) {
+        segments.push({ text, start, duration: 0 });
+      }
+    });
+    return segments;
+  }
+
+  // Fallback: legacy format
+  const legacyEls = document.querySelectorAll('ytd-transcript-segment-renderer');
+  legacyEls.forEach((el) => {
     const timestamp = (el.querySelector('.segment-timestamp') as HTMLElement)?.textContent?.trim() || '';
     const text = (el.querySelector('.segment-text') as HTMLElement)?.textContent?.trim() || '';
 
-    const parts = timestamp.split(':').map(Number);
-    let start = 0;
-    if (parts.length === 3) start = parts[0] * 3600 + parts[1] * 60 + parts[2];
-    else if (parts.length === 2) start = parts[0] * 60 + parts[1];
-
+    const start = parseTimestamp(timestamp);
     if (text) {
       segments.push({ text, start, duration: 0 });
     }
   });
 
   return segments;
+}
+
+/** Parse "0:42" or "1:23:45" to seconds */
+function parseTimestamp(ts: string): number {
+  const parts = ts.split(':').map(Number);
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return 0;
 }
 
 // ---------------------------------------------------------------------------
