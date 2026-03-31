@@ -624,26 +624,58 @@ chrome.runtime.onMessage.addListener(
                     safeInput(urlInput, url);
                   }
 
-                  await sleep(500);
+                  // Step 4: Wait for Angular form validation, then click Insert
+                  // Angular needs time to validate the URL input and enable the submit button.
+                  // We retry finding and clicking the button multiple times.
+                  let inserted = false;
+                  for (let attempt = 0; attempt < 8; attempt++) {
+                    await sleep(600);
 
-                  // Step 4: Click "Insert" / Submit button
-                  const submitBtn = findEl([
-                    'button[aria-label="Insert"]',
-                    'mat-dialog-actions button.mat-primary',
-                    'button.submit-button',
-                  ]) || findByText('button', ['insert', '插入', '新增', 'add', 'submit']);
+                    // Find submit button with broad selectors
+                    const dialog = document.querySelector('mat-dialog-container');
+                    if (!dialog) { inserted = true; break; } // Dialog already closed
 
-                  if (!submitBtn) return { success: false, error: 'Cannot find Submit/Insert button.' };
-                  submitBtn.click();
+                    const allBtns = dialog.querySelectorAll('button');
+                    let submitBtn: HTMLElement | null = null;
 
-                  // Step 5: Wait for confirmation (dialog closes)
-                  for (let i = 0; i < 10; i++) {
+                    for (const btn of allBtns) {
+                      const txt = btn.textContent?.trim().toLowerCase() || '';
+                      const label = btn.getAttribute('aria-label')?.toLowerCase() || '';
+                      const isPrimary = btn.classList.contains('mat-primary') ||
+                                       btn.classList.contains('mdc-button--unelevated') ||
+                                       btn.getAttribute('mat-flat-button') !== null;
+
+                      if ((txt.includes('insert') || txt.includes('插入') || txt.includes('新增') ||
+                           label.includes('insert') || label.includes('add')) &&
+                          !btn.disabled) {
+                        submitBtn = btn as HTMLElement;
+                        break;
+                      }
+                      // Also accept primary-styled enabled buttons
+                      if (isPrimary && !btn.disabled && !txt.includes('cancel') && !txt.includes('取消')) {
+                        submitBtn = btn as HTMLElement;
+                      }
+                    }
+
+                    if (submitBtn) {
+                      submitBtn.click();
+                      inserted = true;
+                      break;
+                    }
+                  }
+
+                  if (!inserted) {
+                    return { success: false, error: 'Insert button not found or remained disabled. URL was filled — click Insert manually.' };
+                  }
+
+                  // Step 5: Wait for confirmation (dialog closes = source added)
+                  for (let i = 0; i < 15; i++) {
                     await sleep(500);
                     const dialog = document.querySelector('mat-dialog-container');
                     if (!dialog) return { success: true };
                   }
 
-                  return { success: true }; // Assume success after timeout
+                  return { success: true }; // Dialog may not close immediately for processing
                 } catch (e: any) {
                   return { success: false, error: e.message || String(e) };
                 }
