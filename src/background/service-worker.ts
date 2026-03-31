@@ -5,6 +5,7 @@ import { formatTranscript, extractVideoId, parseXMLCaptions } from '@/extractors
 import { addMetadataHeader, type MetadataInput } from '@/processing/rag-optimizer';
 import { checkDuplicateByTitle } from '@/processing/duplicate-detector';
 import { getSettings, saveSettings, incrementUsage, checkQuota } from './usage-tracker';
+import { sanitizeYouTubeUrl, deduplicateUrls } from '@/utils/url-sanitizer';
 
 // ---------------------------------------------------------------------------
 // Pre-load config on service worker startup
@@ -739,6 +740,147 @@ chrome.runtime.onMessage.addListener(
             sendResponse({
               success: false,
               error: `Quick import failed: ${err instanceof Error ? err.message : String(err)}`,
+            });
+          }
+        })();
+        return true;
+      }
+
+      case 'EXTRACT_VIDEO_URLS': {
+        // Extract all video URLs visible on the current YouTube page.
+        // Runs a MAIN-world script on the active tab to read the DOM.
+        (async () => {
+          try {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (!tab?.id || !tab.url) {
+              sendResponse({ type: 'VIDEO_URLS_RESULT', urls: [], pageType: 'watch', pageTitle: '', totalVisible: 0, error: 'No active tab' });
+              return;
+            }
+
+            const tabUrl = tab.url;
+
+            // Run extraction in MAIN world (has access to YouTube DOM, no extension APIs)
+            const [result] = await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              world: 'MAIN' as any,
+              func: (currentUrl: string) => {
+                // ---------- Detect page type ----------
+                type PageType = 'watch' | 'playlist' | 'channel' | 'search';
+                let pageType: PageType = 'watch';
+                if (currentUrl.includes('/playlist?list=')) pageType = 'playlist';
+                else if (currentUrl.includes('/results?')) pageType = 'search';
+                else if (
+                  currentUrl.includes('/@') ||
+                  currentUrl.includes('/channel/') ||
+                  currentUrl.includes('/c/') ||
+                  currentUrl.includes('/user/')
+                ) pageType = 'channel';
+                else if (currentUrl.includes('/watch?')) pageType = 'watch';
+
+                // ---------- Single watch page ----------
+                if (pageType === 'watch') {
+                  return {
+                    rawUrls: [currentUrl],
+                    pageType,
+                    pageTitle: document.title.replace(/ - YouTube$/, '').trim(),
+                    totalVisible: 1,
+                  };
+                }
+
+                // ---------- Collect hrefs from the DOM ----------
+                let selector = '';
+                switch (pageType) {
+                  case 'playlist':
+                    selector = 'ytd-playlist-video-renderer a#video-title';
+                    break;
+                  case 'channel':
+                    selector = 'ytd-rich-item-renderer a#video-title-link, ytd-grid-video-renderer a#video-title';
+                    break;
+                  case 'search':
+                    selector = 'ytd-video-renderer a#video-title';
+                    break;
+                }
+
+                const links = document.querySelectorAll<HTMLAnchorElement>(selector);
+                const rawUrls: string[] = [];
+                links.forEach((a) => {
+                  const href = a.href;
+                  if (href) rawUrls.push(href);
+                });
+
+                // ---------- Page title ----------
+                let pageTitle = '';
+                switch (pageType) {
+                  case 'playlist': {
+                    const titleEl = document.querySelector(
+                      'yt-formatted-string.ytd-playlist-header-renderer, h1 yt-formatted-string',
+                    );
+                    pageTitle = titleEl?.textContent?.trim() || '';
+                    break;
+                  }
+                  case 'channel': {
+                    const nameEl = document.querySelector(
+                      'ytd-channel-name yt-formatted-string, #channel-name yt-formatted-string',
+                    );
+                    pageTitle = nameEl?.textContent?.trim() || '';
+                    break;
+                  }
+                  case 'search': {
+                    try {
+                      const sp = new URL(currentUrl).searchParams;
+                      pageTitle = sp.get('search_query') || '';
+                    } catch { pageTitle = ''; }
+                    break;
+                  }
+                }
+
+                if (!pageTitle) {
+                  pageTitle = document.title.replace(/ - YouTube$/, '').trim();
+                }
+
+                return {
+                  rawUrls,
+                  pageType,
+                  pageTitle,
+                  totalVisible: rawUrls.length,
+                };
+              },
+              args: [tabUrl],
+            });
+
+            const extraction = result?.result as {
+              rawUrls: string[];
+              pageType: string;
+              pageTitle: string;
+              totalVisible: number;
+            } | null;
+
+            if (!extraction) {
+              sendResponse({ type: 'VIDEO_URLS_RESULT', urls: [], pageType: 'watch', pageTitle: '', totalVisible: 0, error: 'Extraction returned null' });
+              return;
+            }
+
+            // Sanitize and deduplicate in the service worker (where we have imports)
+            const sanitized = extraction.rawUrls
+              .map((u) => sanitizeYouTubeUrl(u))
+              .filter((u): u is string => u !== null);
+            const urls = deduplicateUrls(sanitized);
+
+            sendResponse({
+              type: 'VIDEO_URLS_RESULT',
+              urls,
+              pageType: extraction.pageType,
+              pageTitle: extraction.pageTitle,
+              totalVisible: extraction.totalVisible,
+            });
+          } catch (err) {
+            sendResponse({
+              type: 'VIDEO_URLS_RESULT',
+              urls: [],
+              pageType: 'watch',
+              pageTitle: '',
+              totalVisible: 0,
+              error: String(err),
             });
           }
         })();

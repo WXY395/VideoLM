@@ -134,4 +134,6 @@ export type MessageType =
   | { type: 'SAVE_SETTINGS'; settings: UserSettings }
   | { type: 'PROCESS_AND_IMPORT'; videoContent: VideoContent; options: ImportOptions }
   | { type: 'QUICK_IMPORT'; videoUrl: string; videoTitle?: string }
-  | { type: 'CHECK_DUPLICATE'; videoId: string; videoTitle: string };
+  | { type: 'CHECK_DUPLICATE'; videoId: string; videoTitle: string }
+  | { type: 'EXTRACT_VIDEO_URLS' }
+  | { type: 'VIDEO_URLS_RESULT'; urls: string[]; pageType: string; pageTitle: string; totalVisible: number };
