@@ -84,6 +84,39 @@ function getPlayerResponse(): any {
   return null;
 }
 
+/**
+ * Wait until the player response matches the expected videoId.
+ * After SPA navigation, the player briefly returns stale data from the previous video.
+ * We poll every 300ms until the videoId matches or timeout.
+ */
+async function waitForCorrectPlayerResponse(
+  expectedVideoId: string | null,
+  timeoutMs = 5000,
+): Promise<any> {
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < timeoutMs) {
+    const pr = getPlayerResponse();
+
+    if (pr) {
+      const prVideoId = pr.videoDetails?.videoId;
+
+      // If we don't have an expected ID (URL parsing failed), accept any response
+      if (!expectedVideoId || prVideoId === expectedVideoId) {
+        return pr;
+      }
+
+      // Player still has old video — wait and retry
+      console.log(`[VideoLM] Waiting for player to load video ${expectedVideoId} (currently ${prVideoId})`);
+    }
+
+    await sleep(300);
+  }
+
+  // Timeout — return whatever we have (better than nothing)
+  return getPlayerResponse();
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -146,7 +179,10 @@ async function extractTranscriptTier2(): Promise<TranscriptSegment[]> {
       return readTranscriptSegmentsFromDOM();
     }
 
-    // Step 1: Expand description silently (needed to access transcript button)
+    // Step 1: Wait for description area to be ready (may still be loading after SPA nav)
+    await waitForElement('ytd-video-description-transcript-section-renderer, #description #expand', 3000);
+
+    // Expand description silently (needed to access transcript button)
     const expandBtn = document.querySelector('#expand') as HTMLElement;
     if (expandBtn) {
       expandBtn.click();
@@ -332,8 +368,13 @@ async function getVideoContent(): Promise<VideoContent | null> {
   cachedContent = null;
 
   try {
-    // Get player response (SPA-aware: tries player API first, then HTML parsing)
-    const pr = getPlayerResponse();
+    // Extract expected videoId from URL
+    const expectedVideoId = extractVideoId(currentUrl);
+
+    // Wait for player to load the correct video (critical for SPA navigation).
+    // After YouTube SPA navigation, the player may still have the OLD video's data
+    // for a brief moment. We poll until the player's videoId matches the URL.
+    const pr = await waitForCorrectPlayerResponse(expectedVideoId, 5000);
     if (!pr) return null;
 
     const meta = extractVideoMetadata(pr);
