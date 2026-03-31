@@ -135,6 +135,9 @@ async function extractTranscriptTier1(playerResponse: any): Promise<TranscriptSe
 // ---------------------------------------------------------------------------
 
 async function extractTranscriptTier2(): Promise<TranscriptSegment[]> {
+  // Remember if description was already expanded so we can restore state
+  const wasExpanded = !!document.querySelector('#collapse:not([hidden])');
+
   try {
     // Check if transcript panel is already open
     const existingSegments = document.querySelectorAll('ytd-transcript-segment-renderer');
@@ -142,15 +145,14 @@ async function extractTranscriptTier2(): Promise<TranscriptSegment[]> {
       return readTranscriptSegmentsFromDOM();
     }
 
-    // Step 1: Expand description silently
+    // Step 1: Expand description silently (needed to access transcript button)
     const expandBtn = document.querySelector('#expand') as HTMLElement;
     if (expandBtn) {
       expandBtn.click();
-      await sleep(300);
+      await sleep(500);
     }
 
     // Step 2: Find and click the transcript button
-    // YouTube uses different labels by locale
     const transcriptLabels = [
       '轉錄稿', '转录稿', '字幕記錄', '字幕记录',
       'transcript', 'Transcript', '文字起こし',
@@ -170,34 +172,74 @@ async function extractTranscriptTier2(): Promise<TranscriptSegment[]> {
     }
 
     if (!clicked) {
-      // Collapse description back
-      const collapseBtn = document.querySelector('#collapse') as HTMLElement;
-      if (collapseBtn) collapseBtn.click();
+      // Restore description state
+      if (!wasExpanded) {
+        const collapseBtn = document.querySelector('#collapse') as HTMLElement;
+        if (collapseBtn) collapseBtn.click();
+      }
       return [];
     }
 
-    // Step 3: Wait for segments to render
-    await waitForElement('ytd-transcript-segment-renderer', 5000);
-    await sleep(300);
+    // Step 3: Wait for segments to FULLY load
+    // YouTube loads segments progressively — we must wait until the count stabilizes
+    const segments = await waitForStableSegments(8000);
 
-    // Step 4: Read segments
-    const segments = readTranscriptSegmentsFromDOM();
-
-    // Step 5: Close panel + collapse description silently
+    // Step 4: Close panel + restore description state
     const closeBtn = document.querySelector(
       'ytd-engagement-panel-section-list-renderer[target-id*="transcript"] #header button'
     ) as HTMLElement;
     if (closeBtn) closeBtn.click();
 
-    await sleep(100);
-    const collapseBtn = document.querySelector('#collapse') as HTMLElement;
-    if (collapseBtn) collapseBtn.click();
+    if (!wasExpanded) {
+      await sleep(100);
+      const collapseBtn = document.querySelector('#collapse') as HTMLElement;
+      if (collapseBtn) collapseBtn.click();
+    }
 
     return segments;
   } catch (e) {
     console.error('[VideoLM] DOM transcript extraction failed', e);
     return [];
   }
+}
+
+/**
+ * Wait until transcript segments stop appearing (count stabilizes).
+ * YouTube loads segments progressively — we need to wait until all are rendered.
+ * Returns the segments once the count is stable for 500ms, or on timeout.
+ */
+async function waitForStableSegments(timeoutMs = 8000): Promise<TranscriptSegment[]> {
+  const startTime = Date.now();
+  let lastCount = 0;
+  let stableSince = 0;
+
+  while (Date.now() - startTime < timeoutMs) {
+    await sleep(300);
+
+    const currentCount = document.querySelectorAll('ytd-transcript-segment-renderer').length;
+
+    if (currentCount > 0 && currentCount === lastCount) {
+      // Count hasn't changed — check if it's been stable long enough
+      if (stableSince === 0) {
+        stableSince = Date.now();
+      } else if (Date.now() - stableSince >= 500) {
+        // Stable for 500ms — all segments are loaded
+        break;
+      }
+    } else {
+      // Count changed or first check — reset stability timer
+      lastCount = currentCount;
+      stableSince = 0;
+    }
+  }
+
+  // Read whatever we have (even if timeout — partial is better than nothing)
+  if (lastCount > 0) {
+    console.log(`[VideoLM] Transcript panel loaded ${lastCount} segments`);
+    return readTranscriptSegmentsFromDOM();
+  }
+
+  return [];
 }
 
 function readTranscriptSegmentsFromDOM(): TranscriptSegment[] {
