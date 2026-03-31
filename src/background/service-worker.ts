@@ -286,8 +286,9 @@ function deduplicateAgainstExisting(urls: string[], existingUrls: string[]): str
 }
 
 /**
- * Import one or more YouTube URLs into the currently-open NLM notebook.
- * Returns a result object with success/error info.
+ * Import YouTube URLs into the currently-open NLM notebook.
+ * All URLs are pasted at once (NLM supports multi-URL paste).
+ * Competitor extensions paste 50 URLs at once successfully.
  */
 async function importUrlsToNlm(urls: string[]): Promise<{
   success: boolean;
@@ -298,10 +299,6 @@ async function importUrlsToNlm(urls: string[]): Promise<{
 }> {
   const urlString = urls.join('\n');
   const urlCount = urls.length;
-
-  if (urls.length === 0 || urls.every(u => !u)) {
-    return { success: false, error: 'No URLs provided.', urlCount: 0 };
-  }
 
   // Find an open NotebookLM tab
   const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
@@ -363,46 +360,84 @@ async function importUrlsToNlm(urls: string[]): Promise<{
       }
 
       try {
-        // Step 1: Click "Add source"
-        const addBtn = findEl(['button[aria-label*="Add"]', '.add-source-button', 'button[data-tooltip*="Add"]'])
-          || findByText('button', ['add source', 'add sources', '新增來源', '添加来源']);
-        if (!addBtn) return { success: false, error: 'Cannot find "Add Source" button.' };
-        addBtn.click();
-        await sleep(800);
+        // ══════════════════════════════════════════════════════════════
+        // NLM 2026 UI: "新增來源" dialog with tab buttons at bottom
+        //   Input: textarea[formcontrolname="discoverSourcesQuery"]
+        //   Tabs: "upload上傳檔案" | "linkvideo_youtube網站" | "drive雲端硬碟" | "content_paste複製的文字"
+        //   Submit: button.actions-enter-button (aria-label="提交")
+        // ══════════════════════════════════════════════════════════════
 
-        // Step 2: Select chip
-        const chip = findByText('mat-chip, mat-chip-option, .mdc-evolution-chip, span.mdc-evolution-chip__text-label', ['youtube'])
-          || findByText('mat-chip, mat-chip-option, .mdc-evolution-chip, span.mdc-evolution-chip__text-label', ['website', '網站', '网站']);
-        if (chip) {
-          const target = chip.closest('mat-chip-option') || chip.closest('.mdc-evolution-chip') || chip;
-          (target as HTMLElement).click();
+        // Step 1: Click "新增來源" / "Add source" button (if dialog not already open)
+        const existingInput = findEl([
+          'textarea[formcontrolname="discoverSourcesQuery"]',
+          'textarea[formcontrolname="newUrl"]',
+        ]);
+        if (!existingInput) {
+          const addBtn = findEl(['button[aria-label*="Add"]', '.add-source-button'])
+            || findByText('button', ['add source', 'add sources', '新增來源', '添加来源', '新增']);
+          if (!addBtn) return { success: false, error: 'Cannot find "Add Source" button.' };
+          addBtn.click();
+          await sleep(1000);
+        }
+
+        // Step 2: Click the "🔗 網站" / "Website" tab (NLM 2026 uses tab buttons, not chips)
+        const websiteTab = findByText('button', ['linkvideo_youtube', '網站', 'website', 'link']);
+        if (websiteTab) {
+          websiteTab.click();
           await sleep(500);
         }
 
-        // Step 3: Fill URL(s)
+        // Step 3: Fill URL(s) into the input field
+        // NLM 2026: formcontrolname="discoverSourcesQuery"
+        // Legacy: formcontrolname="newUrl"
         const urlInput = findEl([
-          'textarea[formcontrolname="newUrl"]', 'input[type="url"]',
-          'textarea[placeholder*="URL"]', 'textarea[placeholder*="http"]',
-          'input[placeholder*="URL"]', 'input[placeholder*="http"]',
+          'textarea[formcontrolname="discoverSourcesQuery"]',
+          'textarea[formcontrolname="newUrl"]',
+          'input[type="url"]',
+          'textarea[placeholder*="URL"]',
+          'textarea[placeholder*="搜尋新來源"]',
+          'textarea[placeholder*="http"]',
         ]) as HTMLTextAreaElement | HTMLInputElement | null;
 
         if (!urlInput) {
-          const dialog = document.querySelector('mat-dialog-container');
-          const any = dialog?.querySelector('textarea, input[type="url"], input[type="text"]') as HTMLTextAreaElement | null;
-          if (any) safeInput(any, url);
-          else return { success: false, error: 'Cannot find URL input field.' };
+          // Last resort: find any visible textarea
+          const allTextareas = document.querySelectorAll('textarea');
+          let found = false;
+          for (const ta of allTextareas) {
+            if ((ta as HTMLElement).offsetParent !== null) {
+              safeInput(ta as HTMLTextAreaElement, url);
+              found = true;
+              break;
+            }
+          }
+          if (!found) return { success: false, error: 'Cannot find URL input field.' };
         } else {
           safeInput(urlInput, url);
         }
 
-        // Step 4: Click submit
+        // Step 4: Click submit button
+        // Wait for Angular to validate the input and enable the button
         let inserted = false;
-        for (let attempt = 0; attempt < 8; attempt++) {
-          await sleep(600);
+        for (let attempt = 0; attempt < 10; attempt++) {
+          await sleep(500);
           checkTimeout();
 
-          // Strategy A: Proximity to input
-          const activeInput = document.querySelector('textarea[formcontrolname="newUrl"], input[type="url"], input[placeholder*="http"]');
+          // Strategy A: Known NLM 2026 selectors
+          const submitBtn = document.querySelector(
+            'button.actions-enter-button:not([disabled]), ' +
+            'button[aria-label="提交"]:not([disabled]), ' +
+            'button[aria-label="Submit"]:not([disabled])'
+          ) as HTMLElement | null;
+          if (submitBtn) {
+            submitBtn.click();
+            inserted = true;
+            break;
+          }
+
+          // Strategy B: Find arrow button near the input
+          const activeInput = document.querySelector(
+            'textarea[formcontrolname="discoverSourcesQuery"], textarea[formcontrolname="newUrl"]'
+          );
           if (activeInput) {
             let container = activeInput.parentElement;
             for (let d = 0; d < 5 && container; d++) {
@@ -410,7 +445,10 @@ async function importUrlsToNlm(urls: string[]): Promise<{
               for (const btn of btns) {
                 const t = (btn.textContent?.trim() || '').toLowerCase();
                 const l = (btn.getAttribute('aria-label') || '').toLowerCase();
-                if (t.includes('cancel') || t.includes('取消') || t.includes('close') || l.includes('close') || l.includes('cancel')) continue;
+                if (t.includes('cancel') || t.includes('取消') || t.includes('close') ||
+                    t.includes('upload') || t.includes('上傳') || t.includes('drive') || t.includes('雲端') ||
+                    t.includes('content_paste') || t.includes('複製') ||
+                    l.includes('close') || l.includes('cancel')) continue;
                 (btn as HTMLElement).click();
                 inserted = true;
                 break;
@@ -420,33 +458,21 @@ async function importUrlsToNlm(urls: string[]): Promise<{
             }
           }
           if (inserted) break;
-
-          // Strategy B: Known selectors
-          const submitBtn = document.querySelector(
-            'button.actions-enter-button:not([disabled]), button[aria-label="提交"]:not([disabled]), button[aria-label="Submit"]:not([disabled])'
-          ) as HTMLElement | null;
-          if (submitBtn) { submitBtn.click(); inserted = true; break; }
-
-          // Strategy C: Text fallback
-          if (!inserted) {
-            for (const btn of document.querySelectorAll('button:not([disabled])')) {
-              const t = (btn.textContent?.trim() || '').toLowerCase();
-              const l = (btn.getAttribute('aria-label') || '').toLowerCase();
-              if ((t.includes('insert') || t.includes('插入') || t.includes('提交') || l.includes('submit') || l.includes('提交')) && !t.includes('cancel')) {
-                (btn as HTMLElement).click(); inserted = true; break;
-              }
-            }
-          }
-          if (inserted) break;
         }
 
-        if (!inserted) return { success: false, error: 'Submit button not found. URLs were filled — click the arrow (→) manually.' };
+        if (!inserted) {
+          return { success: false, error: 'Submit button not found or stayed disabled. URLs were filled in the input.' };
+        }
 
-        // Step 5: Wait for completion
-        for (let i = 0; i < 20; i++) {
-          await sleep(500);
+        // Step 5: Wait for processing (dialog closes or sources appear)
+        // NLM may keep the dialog open while processing — wait up to 30s
+        for (let i = 0; i < 30; i++) {
+          await sleep(1000);
           checkTimeout();
-          if (!document.querySelector('textarea[formcontrolname="newUrl"], input[placeholder*="http"]')) return { success: true };
+          const input = document.querySelector(
+            'textarea[formcontrolname="discoverSourcesQuery"], textarea[formcontrolname="newUrl"]'
+          );
+          if (!input || (input as HTMLElement).offsetParent === null) return { success: true };
         }
         return { success: true };
       } catch (e: any) {
