@@ -32,7 +32,7 @@ export interface VideoContent {
 }
 
 /** How content should be imported into NotebookLM */
-export type ImportMode = 'raw' | 'structured' | 'summary' | 'chapters';
+export type ImportMode = 'quick' | 'raw' | 'structured' | 'summary' | 'chapters';
 
 /** Options controlling the import process */
 export interface ImportOptions {
@@ -133,4 +133,5 @@ export type MessageType =
   | { type: 'SETTINGS'; data: UserSettings }
   | { type: 'SAVE_SETTINGS'; settings: UserSettings }
   | { type: 'PROCESS_AND_IMPORT'; videoContent: VideoContent; options: ImportOptions }
+  | { type: 'QUICK_IMPORT'; videoUrl: string; videoTitle?: string }
   | { type: 'CHECK_DUPLICATE'; videoId: string; videoTitle: string };

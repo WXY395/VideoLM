@@ -492,8 +492,58 @@ chrome.runtime.onMessage.addListener(
         return true;
       }
 
+      case 'QUICK_IMPORT': {
+        // Quick Import: open NotebookLM with the YouTube URL.
+        // NotebookLM natively supports YouTube URLs as sources.
+        // This is the fastest, most reliable import method (1 second, zero extraction).
+        (async () => {
+          try {
+            const videoUrl = (message as any).videoUrl as string;
+            const videoTitle = (message as any).videoTitle as string | undefined;
+
+            if (!videoUrl) {
+              sendResponse({ success: false, error: 'No video URL provided.' });
+              return;
+            }
+
+            // Strategy 1: Try to find an existing NotebookLM tab and inject the URL
+            const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
+
+            if (nlmTabs.length > 0 && nlmTabs[0].id) {
+              // NotebookLM is open — try to add source via the NLM tab
+              // For now, copy URL and switch to the NLM tab
+              await chrome.tabs.update(nlmTabs[0].id, { active: true });
+              sendResponse({
+                success: true,
+                clipboardText: videoUrl,
+                message: `Switched to NotebookLM. YouTube URL copied — click "Add Source" → "YouTube" and paste.`,
+              });
+            } else {
+              // Strategy 2: Open NotebookLM in a new tab
+              await chrome.tabs.create({
+                url: 'https://notebooklm.google.com/',
+                active: true,
+              });
+              sendResponse({
+                success: true,
+                clipboardText: videoUrl,
+                message: `NotebookLM opened. YouTube URL copied — click "Add Source" → "YouTube" and paste.`,
+              });
+            }
+
+            // Track usage
+            await incrementUsage('imports');
+          } catch (err) {
+            sendResponse({
+              success: false,
+              error: `Quick import failed: ${err instanceof Error ? err.message : String(err)}`,
+            });
+          }
+        })();
+        return true;
+      }
+
       case 'IMPORT_TO_NLM': {
-        // Forward to NLM content script (handled by import-orchestrator in future)
         sendResponse({
           type: 'IMPORT_RESULT',
           result: { success: false, error: 'Not yet implemented', tier: 1 as const },

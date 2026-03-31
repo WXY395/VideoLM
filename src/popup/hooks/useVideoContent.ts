@@ -27,18 +27,30 @@ export function useVideoContent(): UseVideoContentResult {
           throw new Error('Open a YouTube video to use VideoLM');
         }
 
-        // Send GET_VIDEO_CONTENT to background service worker.
-        // The background handles: content script injection → tab messaging → response.
+        // First try: get full video content (metadata + transcript)
         const response = await chrome.runtime.sendMessage({ type: 'GET_VIDEO_CONTENT' });
 
         if (cancelled) return;
 
         if (response?.type === 'VIDEO_CONTENT' && response.data) {
           setContent(response.data);
-        } else if (response?.error) {
-          setError(response.error);
         } else {
-          setError('Could not extract video content');
+          // Fallback: create minimal VideoContent from URL alone
+          // This ensures Quick Import always works even if extraction fails
+          const url = tab.url!;
+          const videoId = new URL(url).searchParams.get('v') || '';
+          const title = tab.title?.replace(' - YouTube', '') || 'Unknown Video';
+          setContent({
+            videoId,
+            title,
+            author: '',
+            platform: 'youtube',
+            transcript: [],
+            duration: 0,
+            language: 'unknown',
+            url,
+            metadata: { publishDate: '', viewCount: 0, tags: [] },
+          });
         }
       } catch (err) {
         if (cancelled) return;

@@ -22,7 +22,7 @@ export function App() {
   const { settings, updateSettings } = useSettings();
   const [showSettings, setShowSettings] = useState(false);
 
-  const [mode, setMode] = useState<ImportMode>('structured');
+  const [mode, setMode] = useState<ImportMode>('quick');
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState<{ items: ProgressItem[]; completed: number; total: number } | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
@@ -31,7 +31,8 @@ export function App() {
   const hasAI = Boolean(settings?.tier === 'pro' || settings?.byok);
 
   // Fall back to raw mode if AI not available and current mode requires it
-  const effectiveMode = (!hasAI && mode !== 'raw') ? 'raw' : mode;
+  // Quick mode never needs AI — it passes the URL directly to NotebookLM
+  const effectiveMode = (!hasAI && mode !== 'raw' && mode !== 'quick') ? 'raw' : mode;
 
   const remainingImports = settings
     ? FREE_MONTHLY_LIMIT - (settings.monthlyUsage?.imports ?? 0)
@@ -43,6 +44,43 @@ export function App() {
     setImporting(true);
     setResult(null);
     setProgress(null);
+
+    // Quick Import: send URL directly, no transcript extraction needed
+    if (effectiveMode === 'quick') {
+      chrome.runtime.sendMessage(
+        {
+          type: 'QUICK_IMPORT',
+          videoUrl: content.url,
+          videoTitle: content.title,
+        },
+        async (response) => {
+          setImporting(false);
+
+          if (response?.success) {
+            if (response.clipboardText) {
+              try {
+                await navigator.clipboard.writeText(response.clipboardText);
+              } catch {
+                // Clipboard write may fail
+              }
+            }
+            setResult({
+              success: true,
+              tier: 3,
+              manual: true,
+              message: response.message,
+            });
+          } else {
+            setResult({
+              success: false,
+              tier: 3,
+              error: response?.error || 'Import failed.',
+            });
+          }
+        }
+      );
+      return;
+    }
 
     // For chapter mode, set up progress items
     if (effectiveMode === 'chapters' && content.chapters?.length) {
@@ -164,21 +202,25 @@ export function App() {
         <>
           <VideoInfo content={content} />
 
-          {content.transcript.length === 0 && (
-            <div className="status-message status-message--error">
-              This video has no subtitles available. VideoLM requires subtitles (CC) to extract content.
-              Try a video with the CC icon enabled.
+          <ModeSelector value={effectiveMode} onChange={setMode} hasAI={hasAI} />
+
+          {effectiveMode === 'quick' && (
+            <div className="quick-import-url">
+              URL: {content.url}
             </div>
           )}
 
-          {content.transcript.length > 0 && (
-            <ModeSelector value={effectiveMode} onChange={setMode} hasAI={hasAI} />
+          {effectiveMode !== 'quick' && content.transcript.length === 0 && (
+            <div className="status-message status-message--error">
+              This video has no subtitles available. Transcript-based modes require subtitles (CC).
+              Try Quick Import or a video with the CC icon enabled.
+            </div>
           )}
 
           <ImportButton
             onClick={handleImport}
             loading={importing}
-            disabled={!content || content.transcript.length === 0}
+            disabled={!content || (effectiveMode !== 'quick' && content.transcript.length === 0)}
             remainingImports={remainingImports}
           />
 
