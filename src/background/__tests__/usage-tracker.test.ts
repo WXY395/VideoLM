@@ -137,9 +137,9 @@ describe('usage-tracker', () => {
       expect(quota.canUseAI).toBe(false);
     });
 
-    it('free tier: blocks imports at 10', () => {
+    it('free tier: blocks imports at limit', () => {
       const settings = makeSettings({
-        monthlyUsage: { imports: 10, aiCalls: 0, resetDate: '2099-01-01' },
+        monthlyUsage: { imports: 100, aiCalls: 0, resetDate: '2099-01-01' },
       });
       const quota = checkQuota(settings);
       expect(quota.canImport).toBe(false);
@@ -155,10 +155,10 @@ describe('usage-tracker', () => {
       expect(quota.canUseAI).toBe(true);
     });
 
-    it('free+BYOK: blocks imports at 30', () => {
+    it('free+BYOK: blocks imports at limit', () => {
       const settings = makeSettings({
         byok: { provider: 'openai', apiKey: 'sk-test' },
-        monthlyUsage: { imports: 30, aiCalls: 0, resetDate: '2099-01-01' },
+        monthlyUsage: { imports: 300, aiCalls: 0, resetDate: '2099-01-01' },
       });
       const quota = checkQuota(settings);
       expect(quota.canImport).toBe(false);

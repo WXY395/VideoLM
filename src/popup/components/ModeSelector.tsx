@@ -7,7 +7,8 @@ interface ModeSelectorProps {
   hasAI: boolean;
 }
 
-const modes: Array<{ value: ImportMode; label: string; needsAI: boolean }> = [
+const modes: Array<{ value: ImportMode; label: string; description?: string; needsAI: boolean }> = [
+  { value: 'quick', label: 'Quick Import (URL)', description: 'Send YouTube URL directly to NotebookLM', needsAI: false },
   { value: 'raw', label: 'Raw Transcript', needsAI: false },
   { value: 'structured', label: 'AI Structured', needsAI: true },
   { value: 'summary', label: 'AI Summary', needsAI: true },
@@ -34,6 +35,9 @@ export function ModeSelector({ value, onChange, hasAI }: ModeSelectorProps) {
               onChange={() => onChange(mode.value)}
             />
             {mode.label}
+            {mode.description && (
+              <span className="mode-option__desc">{mode.description}</span>
+            )}
             {disabled && (
               <span className="mode-option__badge">Needs API Key or Pro</span>
             )}
