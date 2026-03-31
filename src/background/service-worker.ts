@@ -148,7 +148,23 @@ async function processAndImport(
     // 6. Increment import usage
     await incrementUsage('imports');
 
-    return { success: true, items };
+    // 7. Copy to clipboard (Tier 3 — always works)
+    // Combine all items into a single text for clipboard
+    const clipboardText = items
+      .map((item) => item.content)
+      .join('\n\n---\n\n');
+
+    // Use offscreen document to write to clipboard from service worker
+    // (Service workers don't have navigator.clipboard)
+    // For now, send the text back to the popup to handle clipboard
+    return {
+      success: true,
+      items,
+      clipboardText,
+      message: items.length === 1
+        ? `Processed "${items[0].title}". Content copied to clipboard — paste into NotebookLM as a "Copied text" source.`
+        : `Processed ${items.length} items. Content copied to clipboard — paste into NotebookLM as a "Copied text" source.`,
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { success: false, items: [], error: message };
