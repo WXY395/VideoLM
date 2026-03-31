@@ -168,15 +168,22 @@ async function extractTranscriptTier1(playerResponse: any): Promise<TranscriptSe
 // ---------------------------------------------------------------------------
 
 async function extractTranscriptTier2(): Promise<TranscriptSegment[]> {
-  // Remember if description was already expanded so we can restore state
   const wasExpanded = !!document.querySelector('#collapse:not([hidden])');
 
   try {
-    // Check if transcript panel is already open (modern or legacy)
-    const existingModern = document.querySelectorAll('transcript-segment-view-model');
-    const existingLegacy = document.querySelectorAll('ytd-transcript-segment-renderer');
-    if (existingModern.length > 0 || existingLegacy.length > 0) {
-      return readTranscriptSegmentsFromDOM();
+    // If transcript panel is already open, close it first.
+    // After SPA navigation, the panel may contain STALE data from the previous video.
+    // Always close and re-open to ensure fresh content.
+    const existingPanel = document.querySelector(
+      'ytd-engagement-panel-section-list-renderer[target-id="PAmodern_transcript_view"][visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"],' +
+      'ytd-engagement-panel-section-list-renderer[target-id*="transcript"][visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]'
+    );
+    if (existingPanel) {
+      const closeBtn = existingPanel.querySelector('#header button') as HTMLElement;
+      if (closeBtn) {
+        closeBtn.click();
+        await sleep(500);
+      }
     }
 
     // Step 1: Wait for description area to be ready (may still be loading after SPA nav)
