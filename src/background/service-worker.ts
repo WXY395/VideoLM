@@ -1,14 +1,7 @@
 import type { MessageType, VideoContent, ImportOptions, ImportMode } from '@/types';
 import { getConfig } from '@/config/dynamic-config';
 import { resolveProvider } from '@/ai/provider-manager';
-import {
-  formatTranscript,
-  extractCaptionTracks,
-  extractVideoMetadata,
-  extractChapters,
-  extractVideoId,
-  parseXMLCaptions,
-} from '@/extractors/youtube-extractor';
+import { formatTranscript } from '@/extractors/youtube-extractor';
 import { addMetadataHeader, type MetadataInput } from '@/processing/rag-optimizer';
 import { checkDuplicateByTitle } from '@/processing/duplicate-detector';
 import { getSettings, saveSettings, incrementUsage, checkQuota } from './usage-tracker';
@@ -170,6 +163,9 @@ chrome.runtime.onMessage.addListener(
   (message: MessageType, sender, sendResponse) => {
     switch (message.type) {
       case 'GET_VIDEO_CONTENT': {
+        // Content script handles everything: playerResponse parsing,
+        // DOM-based transcript extraction, chapter detection.
+        // Background just routes the message to the active YouTube tab.
         (async () => {
           try {
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -180,199 +176,15 @@ chrome.runtime.onMessage.addListener(
 
             const ready = await waitForContentScript(tab.id);
             if (!ready) {
-              sendResponse({ type: 'VIDEO_CONTENT', data: null, error: 'Content script not loaded. Please refresh the YouTube page.' });
-              return;
-            }
-
-            // Step 1: Get playerResponse from content script
-            const prResponse = await chrome.tabs.sendMessage(tab.id, { type: 'GET_PLAYER_RESPONSE' });
-            if (!prResponse?.data) {
-              sendResponse({ type: 'VIDEO_CONTENT', data: null, error: prResponse?.error || 'Could not extract player response.' });
-              return;
-            }
-
-            const playerResponse = prResponse.data;
-            const meta = extractVideoMetadata(playerResponse);
-            const videoId = extractVideoId(tab.url) ?? playerResponse?.videoDetails?.videoId ?? '';
-
-            // Step 2: Fetch transcript via DOM scraping
-            // Opens YouTube's built-in transcript panel and reads the rendered segments.
-            // This is the most reliable approach because:
-            // - timedtext baseUrl requires POT tokens (returns empty without them)
-            // - get_transcript API may need authentication
-            // - DOM scraping uses YouTube's own UI, always works when transcripts exist
-            let segments: any[] = [];
-            let language = 'unknown';
-
-            try {
-              const [result] = await chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                world: 'MAIN',
-                func: async () => {
-                  try {
-                    // Helper: wait for element
-                    const waitFor = (sel: string, timeout = 5000): Promise<Element | null> =>
-                      new Promise((resolve) => {
-                        const el = document.querySelector(sel);
-                        if (el) { resolve(el); return; }
-                        const obs = new MutationObserver(() => {
-                          const found = document.querySelector(sel);
-                          if (found) { obs.disconnect(); resolve(found); }
-                        });
-                        obs.observe(document.body, { childList: true, subtree: true });
-                        setTimeout(() => { obs.disconnect(); resolve(null); }, timeout);
-                      });
-
-                    // Step A: Click "Show transcript" button
-                    // First try the "..." more actions menu below the video
-                    const moreBtn = document.querySelector('ytd-video-description-transcript-section-renderer button')
-                      || document.querySelector('button[aria-label="Show transcript"]')
-                      || document.querySelector('ytd-button-renderer#description-inline-expander button');
-
-                    // Alternative: use the engagement panel trigger
-                    // YouTube has a "Show transcript" button in the description area
-                    let transcriptPanel = document.querySelector('ytd-transcript-renderer');
-
-                    if (!transcriptPanel) {
-                      // Try clicking the transcript button in description
-                      const descButtons = document.querySelectorAll('ytd-video-description-transcript-section-renderer button, ytd-button-renderer button');
-                      for (const btn of descButtons) {
-                        if (btn.textContent?.trim().includes('顯示逐字稿') ||
-                            btn.textContent?.trim().includes('Show transcript') ||
-                            btn.textContent?.trim().includes('字幕')) {
-                          (btn as HTMLElement).click();
-                          break;
-                        }
-                      }
-
-                      // Also try the "..." menu under the video
-                      const menuBtns = document.querySelectorAll('#menu button, ytd-menu-renderer button');
-                      for (const btn of menuBtns) {
-                        const label = btn.getAttribute('aria-label') || btn.textContent || '';
-                        if (label.includes('更多') || label.includes('More') || label.includes('...')) {
-                          (btn as HTMLElement).click();
-                          await new Promise(r => setTimeout(r, 500));
-
-                          // Look for transcript option in dropdown
-                          const menuItems = document.querySelectorAll('tp-yt-paper-listbox ytd-menu-service-item-renderer, ytd-menu-popup-renderer ytd-menu-service-item-renderer');
-                          for (const item of menuItems) {
-                            if (item.textContent?.includes('逐字稿') || item.textContent?.includes('transcript')) {
-                              (item as HTMLElement).click();
-                              break;
-                            }
-                          }
-                          break;
-                        }
-                      }
-
-                      // Wait for transcript panel to appear
-                      transcriptPanel = await waitFor('ytd-transcript-renderer', 5000);
-                    }
-
-                    if (!transcriptPanel) {
-                      // Last resort: try the player's built-in transcript data
-                      // Access ytInitialPlayerResponse for caption tracks
-                      const pr = (window as any).ytInitialPlayerResponse;
-                      const tracks = pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-                      if (!tracks?.length) return { segments: [], language: '', error: 'no_transcript_panel' };
-
-                      // Try fetching with the page's full credentials
-                      const bestTrack = tracks.find((t: any) => t.kind !== 'asr') || tracks[0];
-                      const resp = await fetch(bestTrack.baseUrl, { credentials: 'include' });
-                      const xml = await resp.text();
-
-                      if (xml && xml.includes('<text')) {
-                        const regex = /<text\s+start="([^"]*?)"\s+dur="([^"]*?)"[^>]*>([\s\S]*?)<\/text>/g;
-                        const segs: any[] = [];
-                        let m;
-                        while ((m = regex.exec(xml)) !== null) {
-                          segs.push({
-                            text: m[3].replace(/&amp;/g,'&').replace(/&#39;/g,"'").replace(/&apos;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/\n/g,' ').trim(),
-                            start: parseFloat(m[1]),
-                            duration: parseFloat(m[2]),
-                          });
-                        }
-                        return { segments: segs, language: bestTrack.languageCode || '', error: null };
-                      }
-
-                      return { segments: [], language: bestTrack.languageCode || '', error: 'caption_fetch_empty' };
-                    }
-
-                    // Step B: Wait for transcript segments to load
-                    await waitFor('ytd-transcript-segment-renderer', 3000);
-                    await new Promise(r => setTimeout(r, 500)); // extra settle time
-
-                    // Step C: Read transcript segments from DOM
-                    const segElements = transcriptPanel.querySelectorAll('ytd-transcript-segment-renderer');
-                    const segs: any[] = [];
-
-                    segElements.forEach((el: any) => {
-                      const timestamp = el.querySelector('.segment-timestamp')?.textContent?.trim() || '';
-                      const text = el.querySelector('.segment-text')?.textContent?.trim() || '';
-
-                      // Parse timestamp "0:42" or "1:23:45" to seconds
-                      const parts = timestamp.split(':').map(Number);
-                      let startSec = 0;
-                      if (parts.length === 3) startSec = parts[0] * 3600 + parts[1] * 60 + parts[2];
-                      else if (parts.length === 2) startSec = parts[0] * 60 + parts[1];
-
-                      if (text) {
-                        segs.push({ text, start: startSec, duration: 0 });
-                      }
-                    });
-
-                    // Close the transcript panel to clean up
-                    const closeBtn = transcriptPanel.querySelector('button[aria-label="Close"]')
-                      || transcriptPanel.querySelector('button[aria-label="關閉"]');
-                    if (closeBtn) (closeBtn as HTMLElement).click();
-
-                    return { segments: segs, language: '', error: null };
-                  } catch (e: any) {
-                    return { segments: [], language: '', error: e.message || String(e) };
-                  }
-                },
-                args: [],
+              sendResponse({
+                type: 'VIDEO_CONTENT', data: null,
+                error: 'Content script not loaded. Please refresh the YouTube page.',
               });
-
-              const transcriptResult = result?.result as any;
-              if (transcriptResult?.segments?.length > 0) {
-                segments = transcriptResult.segments;
-                language = transcriptResult.language || 'unknown';
-              }
-            } catch {
-              // Transcript fetch failed — continue with empty transcript
+              return;
             }
 
-            // Step 3: Build VideoContent
-            const rawChapters = extractChapters(playerResponse);
-            const chapters = rawChapters.length > 0
-              ? rawChapters.map((ch: any) => ({
-                  ...ch,
-                  segments: segments.filter((s: any) => s.start >= ch.startTime && s.start < ch.endTime),
-                }))
-              : undefined;
-
-            // Use caption track language if innertube didn't provide one
-            const tracks = extractCaptionTracks(playerResponse);
-            const bestTrack = tracks.find((t: any) => !t.isAutoGenerated) ?? tracks[0];
-            if (language === 'unknown' && bestTrack) {
-              language = bestTrack.languageCode;
-            }
-
-            const content = {
-              videoId,
-              title: meta.title ?? '',
-              author: meta.author ?? '',
-              platform: 'youtube' as const,
-              transcript: segments,
-              chapters,
-              duration: meta.duration ?? 0,
-              language,
-              url: tab.url,
-              metadata: meta.metadata ?? { publishDate: '', viewCount: 0, tags: [] },
-            };
-
-            sendResponse({ type: 'VIDEO_CONTENT', data: content });
+            const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_VIDEO_CONTENT' });
+            sendResponse(response);
           } catch (err) {
             sendResponse({ type: 'VIDEO_CONTENT', data: null, error: String(err) });
           }
