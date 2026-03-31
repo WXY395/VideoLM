@@ -380,98 +380,71 @@ async function importUrlsToNlm(urls: string[]): Promise<{
           await sleep(1000);
         }
 
-        // Step 2: Click the "🔗 網站" / "Website" tab (NLM 2026 uses tab buttons, not chips)
-        const websiteTab = findByText('button', ['linkvideo_youtube', '網站', 'website', 'link']);
+        // Step 2: Click "🔗 網站" tab to open the URL paste sub-page
+        // NLM 2026 has tab buttons: 上傳檔案 | 網站 | 雲端硬碟 | 複製的文字
+        const websiteTab = findByText('button', ['linkvideo_youtube', '網站', 'website']);
         if (websiteTab) {
           websiteTab.click();
-          await sleep(500);
+          await sleep(800);
         }
 
-        // Step 3: Fill URL(s) into the input field
-        // NLM 2026: formcontrolname="discoverSourcesQuery"
-        // Legacy: formcontrolname="newUrl"
+        // Step 3: Find the URL paste textarea
+        // After clicking "網站" tab, a sub-page appears with:
+        //   textarea[formcontrolname="urls"] placeholder="貼上任何連結"
+        //   "如要新增多個網站，請以空格或換行分隔"
+        //   「插入」button at bottom-right
         const urlInput = findEl([
-          'textarea[formcontrolname="discoverSourcesQuery"]',
-          'textarea[formcontrolname="newUrl"]',
-          'input[type="url"]',
-          'textarea[placeholder*="URL"]',
-          'textarea[placeholder*="搜尋新來源"]',
-          'textarea[placeholder*="http"]',
+          'textarea[formcontrolname="urls"]',           // NLM 2026 URL paste page
+          'textarea[placeholder*="貼上任何連結"]',        // NLM 2026 zh-TW
+          'textarea[placeholder*="Paste any link"]',     // NLM 2026 en
+          'textarea[formcontrolname="newUrl"]',          // Legacy
+          'textarea[formcontrolname="discoverSourcesQuery"]', // NLM search bar
         ]) as HTMLTextAreaElement | HTMLInputElement | null;
 
         if (!urlInput) {
-          // Last resort: find any visible textarea
-          const allTextareas = document.querySelectorAll('textarea');
-          let found = false;
-          for (const ta of allTextareas) {
-            if ((ta as HTMLElement).offsetParent !== null) {
-              safeInput(ta as HTMLTextAreaElement, url);
-              found = true;
-              break;
-            }
-          }
-          if (!found) return { success: false, error: 'Cannot find URL input field.' };
-        } else {
-          safeInput(urlInput, url);
+          return { success: false, error: 'Cannot find URL paste field. Make sure "網站" tab is selected.' };
         }
 
-        // Step 4: Click submit button
-        // Wait for Angular to validate the input and enable the button
+        safeInput(urlInput, url);
+        await sleep(500);
+
+        // Step 4: Click "插入" (Insert) button
         let inserted = false;
         for (let attempt = 0; attempt < 10; attempt++) {
           await sleep(500);
           checkTimeout();
 
-          // Strategy A: Known NLM 2026 selectors
+          // Strategy A: Find "插入"/"Insert" button by text
+          const insertBtn = findByText('button', ['插入', 'insert', 'Insert']);
+          if (insertBtn && !(insertBtn as HTMLButtonElement).disabled) {
+            insertBtn.click();
+            inserted = true;
+            break;
+          }
+
+          // Strategy B: Known class selector
           const submitBtn = document.querySelector(
             'button.actions-enter-button:not([disabled]), ' +
             'button[aria-label="提交"]:not([disabled]), ' +
-            'button[aria-label="Submit"]:not([disabled])'
+            'button[aria-label="Insert"]:not([disabled])'
           ) as HTMLElement | null;
           if (submitBtn) {
             submitBtn.click();
             inserted = true;
             break;
           }
-
-          // Strategy B: Find arrow button near the input
-          const activeInput = document.querySelector(
-            'textarea[formcontrolname="discoverSourcesQuery"], textarea[formcontrolname="newUrl"]'
-          );
-          if (activeInput) {
-            let container = activeInput.parentElement;
-            for (let d = 0; d < 5 && container; d++) {
-              const btns = container.querySelectorAll('button:not([disabled])');
-              for (const btn of btns) {
-                const t = (btn.textContent?.trim() || '').toLowerCase();
-                const l = (btn.getAttribute('aria-label') || '').toLowerCase();
-                if (t.includes('cancel') || t.includes('取消') || t.includes('close') ||
-                    t.includes('upload') || t.includes('上傳') || t.includes('drive') || t.includes('雲端') ||
-                    t.includes('content_paste') || t.includes('複製') ||
-                    l.includes('close') || l.includes('cancel')) continue;
-                (btn as HTMLElement).click();
-                inserted = true;
-                break;
-              }
-              if (inserted) break;
-              container = container.parentElement;
-            }
-          }
-          if (inserted) break;
         }
 
         if (!inserted) {
-          return { success: false, error: 'Submit button not found or stayed disabled. URLs were filled in the input.' };
+          return { success: false, error: 'Insert button not found or disabled. URLs were pasted — click "插入" manually.' };
         }
 
-        // Step 5: Wait for processing (dialog closes or sources appear)
-        // NLM may keep the dialog open while processing — wait up to 30s
-        for (let i = 0; i < 30; i++) {
+        // Step 5: Wait for NLM to process (sub-page closes or sources appear)
+        for (let i = 0; i < 60; i++) {
           await sleep(1000);
           checkTimeout();
-          const input = document.querySelector(
-            'textarea[formcontrolname="discoverSourcesQuery"], textarea[formcontrolname="newUrl"]'
-          );
+          // Check if the URL paste textarea is gone (sub-page closed)
+          const input = document.querySelector('textarea[formcontrolname="urls"]');
           if (!input || (input as HTMLElement).offsetParent === null) return { success: true };
         }
         return { success: true };
