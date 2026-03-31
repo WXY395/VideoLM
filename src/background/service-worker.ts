@@ -185,6 +185,39 @@ async function processAndImport(
 // ---------------------------------------------------------------------------
 
 /**
+ * Get the current source count from the open NLM notebook.
+ * Reads the "X/50" indicator or counts source items in the sidebar.
+ */
+async function getNlmSourceCount(): Promise<number> {
+  try {
+    const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
+    if (!nlmTabs[0]?.id) return 0;
+
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId: nlmTabs[0].id },
+      world: 'MAIN' as any,
+      func: () => {
+        // Method 1: Look for "X/50" progress indicator
+        const allText = document.body.innerText;
+        const match = allText.match(/(\d+)\s*\/\s*50/);
+        if (match) return parseInt(match[1], 10);
+
+        // Method 2: Count source items in sidebar
+        const sources = document.querySelectorAll(
+          '.source-item, [class*="source-container"], [data-source-id]'
+        );
+        return sources.length;
+      },
+      args: [],
+    });
+
+    return (result?.result as number) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Import one or more YouTube URLs into the currently-open NLM notebook.
  * Returns a result object with success/error info.
  */
@@ -859,41 +892,52 @@ chrome.runtime.onMessage.addListener(
               return;
             }
 
-            if (urls.length <= 50) {
-              // Small batch — single paste
-              sendResponse(await importUrlsToNlm(urls));
+            // Check how many sources the current notebook already has
+            const currentCount = await getNlmSourceCount();
+            const availableSlots = Math.max(0, 50 - currentCount);
+
+            if (availableSlots === 0) {
+              sendResponse({
+                success: false,
+                error: `This notebook is full (${currentCount}/50 sources). Please create a new notebook first.`,
+              });
               return;
             }
 
-            // Large batch — create chunked queue
-            const queue = createBatchQueue(urls, pageTitle);
+            // Split: first batch fills remaining slots, rest goes to queue
+            const firstBatchSize = Math.min(urls.length, availableSlots);
+            const firstBatch = urls.slice(0, firstBatchSize);
+            const remaining = urls.slice(firstBatchSize);
+
+            // Import first batch
+            const result = await importUrlsToNlm(firstBatch);
+
+            if (!result.success) {
+              sendResponse(result);
+              return;
+            }
+
+            if (remaining.length === 0) {
+              // All fit in current notebook
+              sendResponse({
+                success: true,
+                message: `Added ${firstBatchSize} videos to your notebook!`,
+              });
+              return;
+            }
+
+            // Save remaining URLs to queue for next notebook(s)
+            const queue = createBatchQueue(remaining, pageTitle);
             await saveQueue(queue);
 
-            // Process first chunk
-            const firstChunk = queue.chunks[0];
-            const result = await importUrlsToNlm(firstChunk);
-
-            if (result.success) {
-              const next = await advanceQueue();
-              if (next) {
-                sendResponse({
-                  success: true,
-                  needsNewNotebook: true,
-                  message: `Batch 1/${queue.chunks.length} complete (${firstChunk.length} videos). Please create a new notebook named "${pageTitle} - Part 2" and click "Continue Import".`,
-                  nextChunkSize: next.chunks[next.currentChunk].length,
-                  currentChunk: next.currentChunk,
-                  totalChunks: next.chunks.length,
-                });
-              } else {
-                await clearQueue();
-                sendResponse({
-                  success: true,
-                  message: `All ${urls.length} videos imported!`,
-                });
-              }
-            } else {
-              sendResponse(result);
-            }
+            const totalChunks = queue.chunks.length + 1; // +1 for the batch we just imported
+            sendResponse({
+              success: true,
+              needsNewNotebook: true,
+              message: `Added ${firstBatchSize} videos (notebook full at 50). ${remaining.length} videos remaining — create a new notebook named "${pageTitle} - Part 2" and click "Resume Import".`,
+              remaining: remaining.length,
+              totalChunks,
+            });
           } catch (err) {
             sendResponse({ success: false, error: String(err) });
           }
