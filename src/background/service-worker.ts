@@ -493,46 +493,180 @@ chrome.runtime.onMessage.addListener(
       }
 
       case 'QUICK_IMPORT': {
-        // Quick Import: open NotebookLM with the YouTube URL.
-        // NotebookLM natively supports YouTube URLs as sources.
-        // This is the fastest, most reliable import method (1 second, zero extraction).
+        // Quick Import: automatically add YouTube URL as a source in NotebookLM.
+        // Requires user to have a NLM notebook already open.
+        // Uses DOM automation on the NLM page (same approach as competing extensions).
         (async () => {
           try {
             const videoUrl = (message as any).videoUrl as string;
-            const videoTitle = (message as any).videoTitle as string | undefined;
-
             if (!videoUrl) {
               sendResponse({ success: false, error: 'No video URL provided.' });
               return;
             }
 
-            // Strategy 1: Try to find an existing NotebookLM tab and inject the URL
+            // Find an open NotebookLM tab
             const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
 
-            if (nlmTabs.length > 0 && nlmTabs[0].id) {
-              // NotebookLM is open — try to add source via the NLM tab
-              // For now, copy URL and switch to the NLM tab
-              await chrome.tabs.update(nlmTabs[0].id, { active: true });
+            if (nlmTabs.length === 0 || !nlmTabs[0].id) {
+              // No NLM tab open — open one and tell user to select a notebook
+              await chrome.tabs.create({ url: 'https://notebooklm.google.com/', active: true });
               sendResponse({
-                success: true,
+                success: false,
                 clipboardText: videoUrl,
-                message: `Switched to NotebookLM. YouTube URL copied — click "Add Source" → "YouTube" and paste.`,
+                error: 'Please open a notebook in NotebookLM first, then try again. URL copied to clipboard as backup.',
               });
-            } else {
-              // Strategy 2: Open NotebookLM in a new tab
-              await chrome.tabs.create({
-                url: 'https://notebooklm.google.com/',
-                active: true,
-              });
-              sendResponse({
-                success: true,
-                clipboardText: videoUrl,
-                message: `NotebookLM opened. YouTube URL copied — click "Add Source" → "YouTube" and paste.`,
-              });
+              return;
             }
 
-            // Track usage
-            await incrementUsage('imports');
+            const nlmTabId = nlmTabs[0].id;
+
+            // Check if user is inside a notebook (not just the NLM homepage)
+            const nlmUrl = nlmTabs[0].url || '';
+            const isInNotebook = nlmUrl.includes('/notebook/');
+
+            if (!isInNotebook) {
+              await chrome.tabs.update(nlmTabId, { active: true });
+              sendResponse({
+                success: false,
+                clipboardText: videoUrl,
+                error: 'Please open a specific notebook in NotebookLM, then try again. URL copied to clipboard as backup.',
+              });
+              return;
+            }
+
+            // Execute DOM automation on the NLM tab to add the YouTube URL as a source
+            const [result] = await chrome.scripting.executeScript({
+              target: { tabId: nlmTabId },
+              world: 'MAIN' as any,
+              func: async (url: string) => {
+                const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+                // Helper: find element by multiple selectors
+                function findEl(selectors: string[]): HTMLElement | null {
+                  for (const sel of selectors) {
+                    const el = document.querySelector(sel) as HTMLElement;
+                    if (el && el.offsetParent !== null) return el;
+                  }
+                  return null;
+                }
+
+                // Helper: find button/chip by text content
+                function findByText(selector: string, texts: string[]): HTMLElement | null {
+                  const els = document.querySelectorAll(selector);
+                  for (const el of els) {
+                    const t = el.textContent?.trim().toLowerCase() || '';
+                    if (texts.some(txt => t.includes(txt.toLowerCase()))) {
+                      return el as HTMLElement;
+                    }
+                  }
+                  return null;
+                }
+
+                // Helper: Angular-safe input
+                function safeInput(el: HTMLTextAreaElement | HTMLInputElement, value: string) {
+                  el.focus();
+                  el.value = value;
+                  el.dispatchEvent(new Event('input', { bubbles: true }));
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                  el.dispatchEvent(new Event('blur', { bubbles: true }));
+                }
+
+                try {
+                  // Step 1: Click "Add source" button
+                  const addBtn = findEl([
+                    'button[aria-label*="Add"]',
+                    '.add-source-button',
+                    'button[data-tooltip*="Add"]',
+                  ]) || findByText('button', ['add source', 'add sources', '新增來源', '添加来源']);
+
+                  if (!addBtn) return { success: false, error: 'Cannot find "Add Source" button. Make sure you have a notebook open.' };
+                  addBtn.click();
+                  await sleep(800);
+
+                  // Step 2: Select "YouTube" or "Website" chip
+                  const ytChip = findByText(
+                    'mat-chip, mat-chip-option, .mdc-evolution-chip, span.mdc-evolution-chip__text-label',
+                    ['youtube']
+                  );
+                  const webChip = findByText(
+                    'mat-chip, mat-chip-option, .mdc-evolution-chip, span.mdc-evolution-chip__text-label',
+                    ['website', '網站', '网站']
+                  );
+
+                  const chip = ytChip || webChip;
+                  if (chip) {
+                    // Click the chip or its parent
+                    const clickTarget = chip.closest('mat-chip-option') || chip.closest('.mdc-evolution-chip') || chip;
+                    (clickTarget as HTMLElement).click();
+                    await sleep(500);
+                  }
+
+                  // Step 3: Fill in the URL
+                  const urlInput = findEl([
+                    'textarea[formcontrolname="newUrl"]',
+                    'input[type="url"]',
+                    'textarea[placeholder*="URL"]',
+                    'textarea[placeholder*="http"]',
+                    'input[placeholder*="URL"]',
+                    'input[placeholder*="http"]',
+                  ]) as HTMLTextAreaElement | HTMLInputElement | null;
+
+                  if (!urlInput) {
+                    // Try finding any textarea in the dialog
+                    const dialog = document.querySelector('mat-dialog-container');
+                    const anyTextarea = dialog?.querySelector('textarea, input[type="url"], input[type="text"]') as HTMLTextAreaElement | null;
+                    if (anyTextarea) {
+                      safeInput(anyTextarea, url);
+                    } else {
+                      return { success: false, error: 'Cannot find URL input field.' };
+                    }
+                  } else {
+                    safeInput(urlInput, url);
+                  }
+
+                  await sleep(500);
+
+                  // Step 4: Click "Insert" / Submit button
+                  const submitBtn = findEl([
+                    'button[aria-label="Insert"]',
+                    'mat-dialog-actions button.mat-primary',
+                    'button.submit-button',
+                  ]) || findByText('button', ['insert', '插入', '新增', 'add', 'submit']);
+
+                  if (!submitBtn) return { success: false, error: 'Cannot find Submit/Insert button.' };
+                  submitBtn.click();
+
+                  // Step 5: Wait for confirmation (dialog closes)
+                  for (let i = 0; i < 10; i++) {
+                    await sleep(500);
+                    const dialog = document.querySelector('mat-dialog-container');
+                    if (!dialog) return { success: true };
+                  }
+
+                  return { success: true }; // Assume success after timeout
+                } catch (e: any) {
+                  return { success: false, error: e.message || String(e) };
+                }
+              },
+              args: [videoUrl],
+            });
+
+            const importResult = result?.result as any;
+
+            if (importResult?.success) {
+              await incrementUsage('imports');
+              sendResponse({
+                success: true,
+                message: 'YouTube video added to your NotebookLM notebook!',
+              });
+            } else {
+              // Fallback: copy URL and tell user to paste manually
+              sendResponse({
+                success: false,
+                clipboardText: videoUrl,
+                error: importResult?.error || 'Auto-import failed. URL copied to clipboard — paste manually in NotebookLM.',
+              });
+            }
           } catch (err) {
             sendResponse({
               success: false,
