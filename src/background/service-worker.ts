@@ -181,6 +181,197 @@ async function processAndImport(
 }
 
 // ---------------------------------------------------------------------------
+// NLM Import Core — reusable by QUICK_IMPORT and BATCH_IMPORT
+// ---------------------------------------------------------------------------
+
+/**
+ * Import one or more YouTube URLs into the currently-open NLM notebook.
+ * Returns a result object with success/error info.
+ */
+async function importUrlsToNlm(urls: string[]): Promise<{
+  success: boolean;
+  error?: string;
+  urlCount: number;
+  message?: string;
+  clipboardText?: string;
+}> {
+  const urlString = urls.join('\n');
+  const urlCount = urls.length;
+
+  if (urls.length === 0 || urls.every(u => !u)) {
+    return { success: false, error: 'No URLs provided.', urlCount: 0 };
+  }
+
+  // Find an open NotebookLM tab
+  const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
+
+  if (nlmTabs.length === 0 || !nlmTabs[0].id) {
+    await chrome.tabs.create({ url: 'https://notebooklm.google.com/', active: true });
+    return {
+      success: false, clipboardText: urlString, urlCount,
+      error: 'Please open a notebook in NotebookLM first, then try again.',
+    };
+  }
+
+  const nlmTabId = nlmTabs[0].id;
+  const nlmUrl = nlmTabs[0].url || '';
+
+  if (!nlmUrl.includes('/notebook/')) {
+    await chrome.tabs.update(nlmTabId, { active: true });
+    return {
+      success: false, clipboardText: urlString, urlCount,
+      error: 'Please open a specific notebook in NotebookLM, then try again.',
+    };
+  }
+
+  // Execute DOM automation on the NLM tab
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId: nlmTabId },
+    world: 'MAIN' as any,
+    func: async (url: string) => {
+      const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+      const startTime = Date.now();
+      const TIMEOUT_MS = 30_000;
+      const checkTimeout = () => {
+        if (Date.now() - startTime > TIMEOUT_MS) throw new Error('NLM processing timed out after 30 seconds.');
+      };
+
+      function findEl(selectors: string[]): HTMLElement | null {
+        for (const sel of selectors) {
+          const el = document.querySelector(sel) as HTMLElement;
+          if (el && el.offsetParent !== null) return el;
+        }
+        return null;
+      }
+
+      function findByText(selector: string, texts: string[]): HTMLElement | null {
+        const els = document.querySelectorAll(selector);
+        for (const el of els) {
+          const t = el.textContent?.trim().toLowerCase() || '';
+          if (texts.some(txt => t.includes(txt.toLowerCase()))) return el as HTMLElement;
+        }
+        return null;
+      }
+
+      function safeInput(el: HTMLTextAreaElement | HTMLInputElement, value: string) {
+        el.focus();
+        el.value = value;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new Event('blur', { bubbles: true }));
+      }
+
+      try {
+        // Step 1: Click "Add source"
+        const addBtn = findEl(['button[aria-label*="Add"]', '.add-source-button', 'button[data-tooltip*="Add"]'])
+          || findByText('button', ['add source', 'add sources', '新增來源', '添加来源']);
+        if (!addBtn) return { success: false, error: 'Cannot find "Add Source" button.' };
+        addBtn.click();
+        await sleep(800);
+
+        // Step 2: Select chip
+        const chip = findByText('mat-chip, mat-chip-option, .mdc-evolution-chip, span.mdc-evolution-chip__text-label', ['youtube'])
+          || findByText('mat-chip, mat-chip-option, .mdc-evolution-chip, span.mdc-evolution-chip__text-label', ['website', '網站', '网站']);
+        if (chip) {
+          const target = chip.closest('mat-chip-option') || chip.closest('.mdc-evolution-chip') || chip;
+          (target as HTMLElement).click();
+          await sleep(500);
+        }
+
+        // Step 3: Fill URL(s)
+        const urlInput = findEl([
+          'textarea[formcontrolname="newUrl"]', 'input[type="url"]',
+          'textarea[placeholder*="URL"]', 'textarea[placeholder*="http"]',
+          'input[placeholder*="URL"]', 'input[placeholder*="http"]',
+        ]) as HTMLTextAreaElement | HTMLInputElement | null;
+
+        if (!urlInput) {
+          const dialog = document.querySelector('mat-dialog-container');
+          const any = dialog?.querySelector('textarea, input[type="url"], input[type="text"]') as HTMLTextAreaElement | null;
+          if (any) safeInput(any, url);
+          else return { success: false, error: 'Cannot find URL input field.' };
+        } else {
+          safeInput(urlInput, url);
+        }
+
+        // Step 4: Click submit
+        let inserted = false;
+        for (let attempt = 0; attempt < 8; attempt++) {
+          await sleep(600);
+          checkTimeout();
+
+          // Strategy A: Proximity to input
+          const activeInput = document.querySelector('textarea[formcontrolname="newUrl"], input[type="url"], input[placeholder*="http"]');
+          if (activeInput) {
+            let container = activeInput.parentElement;
+            for (let d = 0; d < 5 && container; d++) {
+              const btns = container.querySelectorAll('button:not([disabled])');
+              for (const btn of btns) {
+                const t = (btn.textContent?.trim() || '').toLowerCase();
+                const l = (btn.getAttribute('aria-label') || '').toLowerCase();
+                if (t.includes('cancel') || t.includes('取消') || t.includes('close') || l.includes('close') || l.includes('cancel')) continue;
+                (btn as HTMLElement).click();
+                inserted = true;
+                break;
+              }
+              if (inserted) break;
+              container = container.parentElement;
+            }
+          }
+          if (inserted) break;
+
+          // Strategy B: Known selectors
+          const submitBtn = document.querySelector(
+            'button.actions-enter-button:not([disabled]), button[aria-label="提交"]:not([disabled]), button[aria-label="Submit"]:not([disabled])'
+          ) as HTMLElement | null;
+          if (submitBtn) { submitBtn.click(); inserted = true; break; }
+
+          // Strategy C: Text fallback
+          if (!inserted) {
+            for (const btn of document.querySelectorAll('button:not([disabled])')) {
+              const t = (btn.textContent?.trim() || '').toLowerCase();
+              const l = (btn.getAttribute('aria-label') || '').toLowerCase();
+              if ((t.includes('insert') || t.includes('插入') || t.includes('提交') || l.includes('submit') || l.includes('提交')) && !t.includes('cancel')) {
+                (btn as HTMLElement).click(); inserted = true; break;
+              }
+            }
+          }
+          if (inserted) break;
+        }
+
+        if (!inserted) return { success: false, error: 'Submit button not found. URLs were filled — click the arrow (→) manually.' };
+
+        // Step 5: Wait for completion
+        for (let i = 0; i < 20; i++) {
+          await sleep(500);
+          checkTimeout();
+          if (!document.querySelector('textarea[formcontrolname="newUrl"], input[placeholder*="http"]')) return { success: true };
+        }
+        return { success: true };
+      } catch (e: any) {
+        return { success: false, error: e.message || String(e) };
+      }
+    },
+    args: [urlString],
+  });
+
+  const importResult = result?.result as any;
+
+  if (importResult?.success) {
+    await incrementUsage('imports');
+    const msg = urlCount === 1
+      ? 'YouTube video added to your NotebookLM notebook!'
+      : `Added ${urlCount} videos to your NotebookLM notebook!`;
+    return { success: true, message: msg, urlCount };
+  } else {
+    return {
+      success: false, clipboardText: urlString, urlCount,
+      error: importResult?.error || 'Auto-import failed. URLs copied to clipboard.',
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Message router
 // ---------------------------------------------------------------------------
 
@@ -502,275 +693,13 @@ chrome.runtime.onMessage.addListener(
       }
 
       case 'QUICK_IMPORT': {
-        // Quick Import: automatically add YouTube URL as a source in NotebookLM.
-        // Requires user to have a NLM notebook already open.
-        // Uses DOM automation on the NLM page (same approach as competing extensions).
         (async () => {
-          let urlCount = 0;
           try {
             const rawVideoUrl = (message as any).videoUrl as string | string[];
             const urls = Array.isArray(rawVideoUrl) ? rawVideoUrl : [rawVideoUrl];
-            const urlString = urls.join('\n');
-            urlCount = urls.length;
-
-            if (!rawVideoUrl || urls.length === 0 || urls.every(u => !u)) {
-              sendResponse({ success: false, error: 'No video URL provided.', urlCount: 0 });
-              return;
-            }
-
-            // Find an open NotebookLM tab
-            const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
-
-            if (nlmTabs.length === 0 || !nlmTabs[0].id) {
-              // No NLM tab open — open one and tell user to select a notebook
-              await chrome.tabs.create({ url: 'https://notebooklm.google.com/', active: true });
-              sendResponse({
-                success: false,
-                clipboardText: urlString,
-                urlCount,
-                error: 'Please open a notebook in NotebookLM first, then try again. URL copied to clipboard as backup.',
-              });
-              return;
-            }
-
-            const nlmTabId = nlmTabs[0].id;
-
-            // Check if user is inside a notebook (not just the NLM homepage)
-            const nlmUrl = nlmTabs[0].url || '';
-            const isInNotebook = nlmUrl.includes('/notebook/');
-
-            if (!isInNotebook) {
-              await chrome.tabs.update(nlmTabId, { active: true });
-              sendResponse({
-                success: false,
-                clipboardText: urlString,
-                urlCount,
-                error: 'Please open a specific notebook in NotebookLM, then try again. URL copied to clipboard as backup.',
-              });
-              return;
-            }
-
-            // Execute DOM automation on the NLM tab to add the YouTube URL(s) as source(s)
-            const [result] = await chrome.scripting.executeScript({
-              target: { tabId: nlmTabId },
-              world: 'MAIN' as any,
-              func: async (url: string) => {
-                const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
-                const startTime = Date.now();
-                const TIMEOUT_MS = 30_000;
-                const checkTimeout = () => {
-                  if (Date.now() - startTime > TIMEOUT_MS) {
-                    throw new Error('NLM processing timed out after 30 seconds.');
-                  }
-                };
-
-                // Helper: find element by multiple selectors
-                function findEl(selectors: string[]): HTMLElement | null {
-                  for (const sel of selectors) {
-                    const el = document.querySelector(sel) as HTMLElement;
-                    if (el && el.offsetParent !== null) return el;
-                  }
-                  return null;
-                }
-
-                // Helper: find button/chip by text content
-                function findByText(selector: string, texts: string[]): HTMLElement | null {
-                  const els = document.querySelectorAll(selector);
-                  for (const el of els) {
-                    const t = el.textContent?.trim().toLowerCase() || '';
-                    if (texts.some(txt => t.includes(txt.toLowerCase()))) {
-                      return el as HTMLElement;
-                    }
-                  }
-                  return null;
-                }
-
-                // Helper: Angular-safe input
-                function safeInput(el: HTMLTextAreaElement | HTMLInputElement, value: string) {
-                  el.focus();
-                  el.value = value;
-                  el.dispatchEvent(new Event('input', { bubbles: true }));
-                  el.dispatchEvent(new Event('change', { bubbles: true }));
-                  el.dispatchEvent(new Event('blur', { bubbles: true }));
-                }
-
-                try {
-                  // Step 1: Click "Add source" button
-                  const addBtn = findEl([
-                    'button[aria-label*="Add"]',
-                    '.add-source-button',
-                    'button[data-tooltip*="Add"]',
-                  ]) || findByText('button', ['add source', 'add sources', '新增來源', '添加来源']);
-
-                  if (!addBtn) return { success: false, error: 'Cannot find "Add Source" button. Make sure you have a notebook open.' };
-                  addBtn.click();
-                  await sleep(800);
-
-                  // Step 2: Select "YouTube" or "Website" chip
-                  const ytChip = findByText(
-                    'mat-chip, mat-chip-option, .mdc-evolution-chip, span.mdc-evolution-chip__text-label',
-                    ['youtube']
-                  );
-                  const webChip = findByText(
-                    'mat-chip, mat-chip-option, .mdc-evolution-chip, span.mdc-evolution-chip__text-label',
-                    ['website', '網站', '网站']
-                  );
-
-                  const chip = ytChip || webChip;
-                  if (chip) {
-                    // Click the chip or its parent
-                    const clickTarget = chip.closest('mat-chip-option') || chip.closest('.mdc-evolution-chip') || chip;
-                    (clickTarget as HTMLElement).click();
-                    await sleep(500);
-                  }
-
-                  // Step 3: Fill in the URL
-                  const urlInput = findEl([
-                    'textarea[formcontrolname="newUrl"]',
-                    'input[type="url"]',
-                    'textarea[placeholder*="URL"]',
-                    'textarea[placeholder*="http"]',
-                    'input[placeholder*="URL"]',
-                    'input[placeholder*="http"]',
-                  ]) as HTMLTextAreaElement | HTMLInputElement | null;
-
-                  if (!urlInput) {
-                    // Try finding any textarea in the dialog
-                    const dialog = document.querySelector('mat-dialog-container');
-                    const anyTextarea = dialog?.querySelector('textarea, input[type="url"], input[type="text"]') as HTMLTextAreaElement | null;
-                    if (anyTextarea) {
-                      safeInput(anyTextarea, url);
-                    } else {
-                      return { success: false, error: 'Cannot find URL input field.' };
-                    }
-                  } else {
-                    safeInput(urlInput, url);
-                  }
-
-                  // Step 4: Find and click the submit button
-                  // NLM 2026 UI uses a blue arrow button (→) next to the input field,
-                  // not a traditional "Insert" text button.
-                  // Strategy: find the closest button to the URL input field.
-                  let inserted = false;
-                  for (let attempt = 0; attempt < 8; attempt++) {
-                    await sleep(600);
-                    checkTimeout();
-
-                    // Check if dialog/overlay already closed
-                    const panels = document.querySelectorAll(
-                      'mat-dialog-container, [class*="dialog"], [class*="modal"], [class*="overlay-panel"]'
-                    );
-
-                    // Strategy A: Find submit button near the URL input
-                    const activeInput = document.querySelector(
-                      'textarea[formcontrolname="newUrl"], input[type="url"], input[placeholder*="http"], textarea[placeholder*="URL"]'
-                    );
-                    if (activeInput) {
-                      // Walk up to find the container row, then find the button
-                      let container = activeInput.parentElement;
-                      for (let depth = 0; depth < 5 && container; depth++) {
-                        const btns = container.querySelectorAll('button:not([disabled])');
-                        for (const btn of btns) {
-                          // Skip buttons that are clearly not submit (close, cancel)
-                          const txt = (btn.textContent?.trim() || '').toLowerCase();
-                          const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-                          if (txt.includes('cancel') || txt.includes('取消') ||
-                              txt.includes('close') || txt.includes('關閉') ||
-                              label.includes('close') || label.includes('cancel')) continue;
-
-                          // Found a non-cancel, non-disabled button near the input → click it
-                          (btn as HTMLElement).click();
-                          inserted = true;
-                          break;
-                        }
-                        if (inserted) break;
-                        container = container.parentElement;
-                      }
-                    }
-
-                    if (inserted) break;
-
-                    // Strategy B: Find the submit button by known selectors
-                    // NLM 2026 uses: .actions-enter-button with aria-label="提交"
-                    const submitByClass = document.querySelector(
-                      'button.actions-enter-button:not([disabled]), ' +
-                      'button[aria-label="提交"]:not([disabled]), ' +
-                      'button[aria-label="Submit"]:not([disabled]), ' +
-                      'button[aria-label="Insert"]:not([disabled])'
-                    ) as HTMLElement | null;
-                    if (submitByClass) {
-                      submitByClass.click();
-                      inserted = true;
-                    }
-
-                    if (!inserted) {
-                      // Strategy C: Find by text/aria fallback
-                      const allBtns = document.querySelectorAll('button:not([disabled])');
-                      for (const btn of allBtns) {
-                        const txt = (btn.textContent?.trim() || '').toLowerCase();
-                        const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-                        if ((txt.includes('insert') || txt.includes('插入') || txt.includes('提交') ||
-                             label.includes('insert') || label.includes('submit') || label.includes('提交') ||
-                             label.includes('add source') || label.includes('新增來源')) &&
-                            !txt.includes('cancel') && !txt.includes('close')) {
-                          (btn as HTMLElement).click();
-                          inserted = true;
-                          break;
-                        }
-                      }
-                    }
-
-                    if (inserted) break;
-                  }
-
-                  if (!inserted) {
-                    return { success: false, error: 'Submit button not found. URL was filled — please click the arrow (→) button manually.' };
-                  }
-
-                  // Step 5: Wait for source to be added (dialog/overlay closes or source appears)
-                  for (let i = 0; i < 20; i++) {
-                    await sleep(500);
-                    checkTimeout();
-                    // Check if the input field is gone (dialog closed)
-                    const input = document.querySelector('textarea[formcontrolname="newUrl"], input[placeholder*="http"]');
-                    if (!input) return { success: true };
-                  }
-
-                  return { success: true };
-                } catch (e: any) {
-                  return { success: false, error: e.message || String(e) };
-                }
-              },
-              args: [urlString],
-            });
-
-            const importResult = result?.result as any;
-
-            if (importResult?.success) {
-              await incrementUsage('imports');
-              const msg = urlCount === 1
-                ? 'YouTube video added to your NotebookLM notebook!'
-                : `Added ${urlCount} videos to your NotebookLM notebook!`;
-              sendResponse({
-                success: true,
-                message: msg,
-                urlCount,
-              });
-            } else {
-              // Fallback: copy URL(s) and tell user to paste manually
-              sendResponse({
-                success: false,
-                clipboardText: urlString,
-                urlCount,
-                error: importResult?.error || 'Auto-import failed. URL copied to clipboard — paste manually in NotebookLM.',
-              });
-            }
+            sendResponse(await importUrlsToNlm(urls.filter(Boolean)));
           } catch (err) {
-            sendResponse({
-              success: false,
-              urlCount,
-              error: `Quick import failed: ${err instanceof Error ? err.message : String(err)}`,
-            });
+            sendResponse({ success: false, urlCount: 0, error: String(err) });
           }
         })();
         return true;
@@ -924,20 +853,15 @@ chrome.runtime.onMessage.addListener(
       case 'BATCH_IMPORT': {
         (async () => {
           try {
-            const { urls, pageTitle } = message;
-
+            const { urls, pageTitle } = message as any;
             if (!urls || urls.length === 0) {
               sendResponse({ success: false, error: 'No URLs provided.' });
               return;
             }
 
-            if (urls.length <= MAX_BATCH_SIZE) {
-              // Small batch — delegate directly to QUICK_IMPORT logic
-              // Re-dispatch as QUICK_IMPORT (single paste of all URLs)
-              chrome.runtime.sendMessage(
-                { type: 'QUICK_IMPORT', videoUrl: urls, videoTitle: pageTitle },
-                (resp) => sendResponse(resp),
-              );
+            if (urls.length <= 50) {
+              // Small batch — single paste
+              sendResponse(await importUrlsToNlm(urls));
               return;
             }
 
@@ -945,45 +869,33 @@ chrome.runtime.onMessage.addListener(
             const queue = createBatchQueue(urls, pageTitle);
             await saveQueue(queue);
 
-            // Process the first chunk via QUICK_IMPORT
+            // Process first chunk
             const firstChunk = queue.chunks[0];
-            chrome.runtime.sendMessage(
-              { type: 'QUICK_IMPORT', videoUrl: firstChunk, videoTitle: pageTitle },
-              async (resp) => {
-                if (resp?.success) {
-                  const next = await advanceQueue();
-                  if (next) {
-                    sendResponse({
-                      success: true,
-                      needsNewNotebook: true,
-                      message: `Batch 1/${queue.chunks.length} complete (${firstChunk.length} videos). Please create a new notebook named "${pageTitle} - Part 2" and click "Continue Import".`,
-                      nextChunkSize: next.chunks[next.currentChunk].length,
-                      currentChunk: next.currentChunk,
-                      totalChunks: next.chunks.length,
-                    });
-                  } else {
-                    // Single chunk was enough after all
-                    sendResponse({
-                      success: true,
-                      message: `All ${queue.totalUrls} videos imported successfully.`,
-                    });
-                  }
-                } else {
-                  // First chunk failed — queue is still at chunk 0 for retry
-                  sendResponse({
-                    success: false,
-                    error: resp?.error || 'First batch failed.',
-                    currentChunk: 0,
-                    totalChunks: queue.chunks.length,
-                  });
-                }
-              },
-            );
+            const result = await importUrlsToNlm(firstChunk);
+
+            if (result.success) {
+              const next = await advanceQueue();
+              if (next) {
+                sendResponse({
+                  success: true,
+                  needsNewNotebook: true,
+                  message: `Batch 1/${queue.chunks.length} complete (${firstChunk.length} videos). Please create a new notebook named "${pageTitle} - Part 2" and click "Continue Import".`,
+                  nextChunkSize: next.chunks[next.currentChunk].length,
+                  currentChunk: next.currentChunk,
+                  totalChunks: next.chunks.length,
+                });
+              } else {
+                await clearQueue();
+                sendResponse({
+                  success: true,
+                  message: `All ${urls.length} videos imported!`,
+                });
+              }
+            } else {
+              sendResponse(result);
+            }
           } catch (err) {
-            sendResponse({
-              success: false,
-              error: `Batch import failed: ${err instanceof Error ? err.message : String(err)}`,
-            });
+            sendResponse({ success: false, error: String(err) });
           }
         })();
         return true;
@@ -994,52 +906,31 @@ chrome.runtime.onMessage.addListener(
           try {
             const queue = await loadQueue();
             if (!queue) {
-              sendResponse({ hasPending: false, success: false, error: 'No pending batch queue.' });
+              sendResponse({ success: false, error: 'No pending batch to resume.' });
               return;
             }
 
-            const chunkIndex = queue.currentChunk;
-            const chunk = queue.chunks[chunkIndex];
-            const totalChunks = queue.chunks.length;
-            const partNumber = chunkIndex + 1;
+            const chunk = queue.chunks[queue.currentChunk];
+            const result = await importUrlsToNlm(chunk);
 
-            // Process current chunk via QUICK_IMPORT
-            chrome.runtime.sendMessage(
-              { type: 'QUICK_IMPORT', videoUrl: chunk, videoTitle: queue.pageTitle },
-              async (resp) => {
-                if (resp?.success) {
-                  const next = await advanceQueue();
-                  if (next) {
-                    const nextPart = next.currentChunk + 1;
-                    sendResponse({
-                      success: true,
-                      needsNewNotebook: true,
-                      message: `Batch ${partNumber}/${totalChunks} complete (${chunk.length} videos). Please create a new notebook named "${queue.pageTitle} - Part ${nextPart}" and click "Continue Import".`,
-                      nextChunkSize: next.chunks[next.currentChunk].length,
-                      currentChunk: next.currentChunk,
-                      totalChunks,
-                    });
-                  } else {
-                    sendResponse({
-                      success: true,
-                      message: `All batches complete! ${queue.totalUrls} videos imported across ${totalChunks} notebooks.`,
-                    });
-                  }
-                } else {
-                  sendResponse({
-                    success: false,
-                    error: resp?.error || `Batch ${partNumber}/${totalChunks} failed. You can retry.`,
-                    currentChunk: chunkIndex,
-                    totalChunks,
-                  });
-                }
-              },
-            );
+            if (result.success) {
+              const next = await advanceQueue();
+              if (next) {
+                sendResponse({
+                  success: true,
+                  needsNewNotebook: true,
+                  message: `Batch ${queue.currentChunk + 1}/${queue.chunks.length} complete. Create "${queue.pageTitle} - Part ${queue.currentChunk + 2}" and continue.`,
+                  remaining: next.totalUrls - (next.currentChunk * 50),
+                });
+              } else {
+                await clearQueue();
+                sendResponse({ success: true, message: 'All batches imported!' });
+              }
+            } else {
+              sendResponse(result);
+            }
           } catch (err) {
-            sendResponse({
-              success: false,
-              error: `Resume failed: ${err instanceof Error ? err.message : String(err)}`,
-            });
+            sendResponse({ success: false, error: String(err) });
           }
         })();
         return true;
