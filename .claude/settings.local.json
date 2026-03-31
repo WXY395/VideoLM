@@ -17,7 +17,11 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:dev.to)",
       "mcp__plugin_playwright_playwright__browser_evaluate",
-      "mcp__plugin_playwright_playwright__browser_close"
+      "mcp__plugin_playwright_playwright__browser_close",
+      "WebFetch(domain:medium.com)",
+      "WebFetch(domain:scrapecreators.com)",
+      "WebFetch(domain:blog.nidhin.dev)",
+      "WebFetch(domain:grokipedia.com)"
     ]
   }
 }
