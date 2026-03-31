@@ -136,4 +136,7 @@ export type MessageType =
   | { type: 'QUICK_IMPORT'; videoUrl: string | string[]; videoTitle?: string }
   | { type: 'CHECK_DUPLICATE'; videoId: string; videoTitle: string }
   | { type: 'EXTRACT_VIDEO_URLS' }
-  | { type: 'VIDEO_URLS_RESULT'; urls: string[]; pageType: string; pageTitle: string; totalVisible: number };
+  | { type: 'VIDEO_URLS_RESULT'; urls: string[]; pageType: string; pageTitle: string; totalVisible: number }
+  | { type: 'BATCH_IMPORT'; urls: string[]; pageTitle: string }
+  | { type: 'RESUME_BATCH' }
+  | { type: 'CHECK_PENDING_QUEUE' };
