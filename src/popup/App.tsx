@@ -10,7 +10,7 @@ import { DuplicateWarning, type DuplicateAction } from './components/DuplicateWa
 import { SettingsPage } from './components/SettingsPage';
 import './styles.css';
 
-const FREE_MONTHLY_LIMIT = 30;
+const FREE_MONTHLY_LIMIT = 100;
 
 interface ProgressItem {
   title: string;
