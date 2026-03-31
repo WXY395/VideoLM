@@ -1,7 +1,7 @@
 import type { MessageType, VideoContent, ImportOptions, ImportMode } from '@/types';
 import { getConfig } from '@/config/dynamic-config';
 import { resolveProvider } from '@/ai/provider-manager';
-import { formatTranscript } from '@/extractors/youtube-extractor';
+import { formatTranscript, extractVideoId, parseXMLCaptions } from '@/extractors/youtube-extractor';
 import { addMetadataHeader, type MetadataInput } from '@/processing/rag-optimizer';
 import { checkDuplicateByTitle } from '@/processing/duplicate-detector';
 import { getSettings, saveSettings, incrementUsage, checkQuota } from './usage-tracker';
