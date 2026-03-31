@@ -624,58 +624,79 @@ chrome.runtime.onMessage.addListener(
                     safeInput(urlInput, url);
                   }
 
-                  // Step 4: Wait for Angular form validation, then click Insert
-                  // Angular needs time to validate the URL input and enable the submit button.
-                  // We retry finding and clicking the button multiple times.
+                  // Step 4: Find and click the submit button
+                  // NLM 2026 UI uses a blue arrow button (→) next to the input field,
+                  // not a traditional "Insert" text button.
+                  // Strategy: find the closest button to the URL input field.
                   let inserted = false;
                   for (let attempt = 0; attempt < 8; attempt++) {
                     await sleep(600);
 
-                    // Find submit button with broad selectors
-                    const dialog = document.querySelector('mat-dialog-container');
-                    if (!dialog) { inserted = true; break; } // Dialog already closed
+                    // Check if dialog/overlay already closed
+                    const panels = document.querySelectorAll(
+                      'mat-dialog-container, [class*="dialog"], [class*="modal"], [class*="overlay-panel"]'
+                    );
 
-                    const allBtns = dialog.querySelectorAll('button');
-                    let submitBtn: HTMLElement | null = null;
+                    // Strategy A: Find submit button near the URL input
+                    const activeInput = document.querySelector(
+                      'textarea[formcontrolname="newUrl"], input[type="url"], input[placeholder*="http"], textarea[placeholder*="URL"]'
+                    );
+                    if (activeInput) {
+                      // Walk up to find the container row, then find the button
+                      let container = activeInput.parentElement;
+                      for (let depth = 0; depth < 5 && container; depth++) {
+                        const btns = container.querySelectorAll('button:not([disabled])');
+                        for (const btn of btns) {
+                          // Skip buttons that are clearly not submit (close, cancel)
+                          const txt = (btn.textContent?.trim() || '').toLowerCase();
+                          const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+                          if (txt.includes('cancel') || txt.includes('取消') ||
+                              txt.includes('close') || txt.includes('關閉') ||
+                              label.includes('close') || label.includes('cancel')) continue;
 
+                          // Found a non-cancel, non-disabled button near the input → click it
+                          (btn as HTMLElement).click();
+                          inserted = true;
+                          break;
+                        }
+                        if (inserted) break;
+                        container = container.parentElement;
+                      }
+                    }
+
+                    if (inserted) break;
+
+                    // Strategy B: Find button by text/aria in any dialog/overlay
+                    const allBtns = document.querySelectorAll('button:not([disabled])');
                     for (const btn of allBtns) {
-                      const txt = btn.textContent?.trim().toLowerCase() || '';
-                      const label = btn.getAttribute('aria-label')?.toLowerCase() || '';
-                      const isPrimary = btn.classList.contains('mat-primary') ||
-                                       btn.classList.contains('mdc-button--unelevated') ||
-                                       btn.getAttribute('mat-flat-button') !== null;
-
-                      if ((txt.includes('insert') || txt.includes('插入') || txt.includes('新增') ||
-                           label.includes('insert') || label.includes('add')) &&
-                          !btn.disabled) {
-                        submitBtn = btn as HTMLElement;
+                      const txt = (btn.textContent?.trim() || '').toLowerCase();
+                      const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+                      if ((txt.includes('insert') || txt.includes('插入') ||
+                           label.includes('insert') || label.includes('submit') ||
+                           label.includes('add source') || label.includes('新增來源')) &&
+                          !txt.includes('cancel')) {
+                        (btn as HTMLElement).click();
+                        inserted = true;
                         break;
                       }
-                      // Also accept primary-styled enabled buttons
-                      if (isPrimary && !btn.disabled && !txt.includes('cancel') && !txt.includes('取消')) {
-                        submitBtn = btn as HTMLElement;
-                      }
                     }
 
-                    if (submitBtn) {
-                      submitBtn.click();
-                      inserted = true;
-                      break;
-                    }
+                    if (inserted) break;
                   }
 
                   if (!inserted) {
-                    return { success: false, error: 'Insert button not found or remained disabled. URL was filled — click Insert manually.' };
+                    return { success: false, error: 'Submit button not found. URL was filled — please click the arrow (→) button manually.' };
                   }
 
-                  // Step 5: Wait for confirmation (dialog closes = source added)
-                  for (let i = 0; i < 15; i++) {
+                  // Step 5: Wait for source to be added (dialog/overlay closes or source appears)
+                  for (let i = 0; i < 20; i++) {
                     await sleep(500);
-                    const dialog = document.querySelector('mat-dialog-container');
-                    if (!dialog) return { success: true };
+                    // Check if the input field is gone (dialog closed)
+                    const input = document.querySelector('textarea[formcontrolname="newUrl"], input[placeholder*="http"]');
+                    if (!input) return { success: true };
                   }
 
-                  return { success: true }; // Dialog may not close immediately for processing
+                  return { success: true };
                 } catch (e: any) {
                   return { success: false, error: e.message || String(e) };
                 }
