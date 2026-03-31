@@ -84,7 +84,7 @@ export function checkQuota(settings: UserSettings): { canImport: boolean; canUse
   }
 
   const hasBYOK = Boolean(settings.byok?.apiKey);
-  const importLimit = hasBYOK ? 30 : 10;
+  const importLimit = hasBYOK ? 300 : 100;
 
   return {
     canImport: settings.monthlyUsage.imports < importLimit,
