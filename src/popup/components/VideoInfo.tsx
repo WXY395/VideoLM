@@ -1,8 +1,11 @@
 import React from 'react';
 import type { VideoContent } from '@/types';
+import type { PageType } from '../hooks/useVideoContent';
 
 interface VideoInfoProps {
   content: VideoContent;
+  pageType?: PageType;
+  batchCount?: number;
 }
 
 function formatDuration(seconds: number): string {
@@ -15,7 +18,38 @@ function formatDuration(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-export function VideoInfo({ content }: VideoInfoProps) {
+const PAGE_TYPE_LABELS: Record<string, { icon: string; label: string }> = {
+  playlist: { icon: '\uD83D\uDCCB', label: 'Playlist' },
+  channel: { icon: '\uD83D\uDCFA', label: 'Channel' },
+  search: { icon: '\uD83D\uDD0D', label: 'Search Results' },
+};
+
+export function VideoInfo({ content, pageType, batchCount }: VideoInfoProps) {
+  const isBatch = pageType && pageType !== 'watch' && pageType !== 'unknown';
+
+  if (isBatch) {
+    const typeInfo = PAGE_TYPE_LABELS[pageType] || { icon: '', label: pageType };
+    return (
+      <div className="video-info">
+        <div className="video-info__badge">
+          {typeInfo.icon} {typeInfo.label}
+        </div>
+        <div className="video-info__title" title={content.title}>
+          {content.title}
+        </div>
+        <div className="video-info__meta">
+          <span>{batchCount ?? 0} videos found</span>
+        </div>
+        {(batchCount ?? 0) < 5 && (
+          <div className="video-info__hint">
+            Scroll down on YouTube to load more videos, then reopen VideoLM.
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Single video (watch page)
   const chapterCount = content.chapters?.length ?? 0;
   const hasSubtitles = content.transcript.length > 0;
 

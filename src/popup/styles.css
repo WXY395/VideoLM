@@ -433,3 +433,142 @@ body {
 .save-button:hover {
   background: #1765cc;
 }
+
+/* Quick Import URL preview */
+.quick-import-url {
+  font-size: 12px;
+  color: #5f6368;
+  background: #f8f9fa;
+  padding: 6px 10px;
+  border-radius: 4px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Video Info — batch badge */
+.video-info__badge {
+  font-size: 11px;
+  font-weight: 500;
+  color: #1a73e8;
+  background: #e8f0fe;
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  margin-bottom: 6px;
+}
+
+.video-info__hint {
+  font-size: 11px;
+  color: #ea8600;
+  margin-top: 4px;
+}
+
+/* Batch Info */
+.batch-info {
+  margin-bottom: 16px;
+}
+
+.batch-info__warning {
+  font-size: 12px;
+  color: #e37400;
+  background: #fef7e0;
+  border: 1px solid #fdd663;
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+.batch-info__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.batch-info__button {
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: background 0.15s;
+}
+
+.batch-info__button--full {
+  flex: unset;
+  width: 100%;
+}
+
+.batch-info__button--primary {
+  background: #1a73e8;
+  color: #fff;
+}
+
+.batch-info__button--primary:hover:not(:disabled) {
+  background: #1765cc;
+}
+
+.batch-info__button--secondary {
+  background: #fff;
+  color: #3c4043;
+  border: 1px solid #dadce0;
+}
+
+.batch-info__button--secondary:hover:not(:disabled) {
+  background: #f1f3f4;
+}
+
+.batch-info__button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Batch Resume Prompt */
+.batch-resume {
+  background: #e8f0fe;
+  border: 1px solid #aecbfa;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.batch-resume__text {
+  font-size: 12px;
+  color: #174ea6;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.batch-resume__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.batch-resume__button {
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  background: #1a73e8;
+  color: #fff;
+  transition: background 0.15s;
+}
+
+.batch-resume__button:hover {
+  background: #1765cc;
+}
+
+.batch-resume__button--dismiss {
+  background: transparent;
+  color: #5f6368;
+  border: 1px solid #dadce0;
+}
+
+.batch-resume__button--dismiss:hover {
+  background: #f1f3f4;
+}
