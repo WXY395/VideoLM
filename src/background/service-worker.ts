@@ -498,10 +498,15 @@ chrome.runtime.onMessage.addListener(
         // Requires user to have a NLM notebook already open.
         // Uses DOM automation on the NLM page (same approach as competing extensions).
         (async () => {
+          let urlCount = 0;
           try {
-            const videoUrl = (message as any).videoUrl as string;
-            if (!videoUrl) {
-              sendResponse({ success: false, error: 'No video URL provided.' });
+            const rawVideoUrl = (message as any).videoUrl as string | string[];
+            const urls = Array.isArray(rawVideoUrl) ? rawVideoUrl : [rawVideoUrl];
+            const urlString = urls.join('\n');
+            urlCount = urls.length;
+
+            if (!rawVideoUrl || urls.length === 0 || urls.every(u => !u)) {
+              sendResponse({ success: false, error: 'No video URL provided.', urlCount: 0 });
               return;
             }
 
@@ -513,7 +518,8 @@ chrome.runtime.onMessage.addListener(
               await chrome.tabs.create({ url: 'https://notebooklm.google.com/', active: true });
               sendResponse({
                 success: false,
-                clipboardText: videoUrl,
+                clipboardText: urlString,
+                urlCount,
                 error: 'Please open a notebook in NotebookLM first, then try again. URL copied to clipboard as backup.',
               });
               return;
@@ -529,18 +535,26 @@ chrome.runtime.onMessage.addListener(
               await chrome.tabs.update(nlmTabId, { active: true });
               sendResponse({
                 success: false,
-                clipboardText: videoUrl,
+                clipboardText: urlString,
+                urlCount,
                 error: 'Please open a specific notebook in NotebookLM, then try again. URL copied to clipboard as backup.',
               });
               return;
             }
 
-            // Execute DOM automation on the NLM tab to add the YouTube URL as a source
+            // Execute DOM automation on the NLM tab to add the YouTube URL(s) as source(s)
             const [result] = await chrome.scripting.executeScript({
               target: { tabId: nlmTabId },
               world: 'MAIN' as any,
               func: async (url: string) => {
                 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+                const startTime = Date.now();
+                const TIMEOUT_MS = 30_000;
+                const checkTimeout = () => {
+                  if (Date.now() - startTime > TIMEOUT_MS) {
+                    throw new Error('NLM processing timed out after 30 seconds.');
+                  }
+                };
 
                 // Helper: find element by multiple selectors
                 function findEl(selectors: string[]): HTMLElement | null {
@@ -632,6 +646,7 @@ chrome.runtime.onMessage.addListener(
                   let inserted = false;
                   for (let attempt = 0; attempt < 8; attempt++) {
                     await sleep(600);
+                    checkTimeout();
 
                     // Check if dialog/overlay already closed
                     const panels = document.querySelectorAll(
@@ -707,6 +722,7 @@ chrome.runtime.onMessage.addListener(
                   // Step 5: Wait for source to be added (dialog/overlay closes or source appears)
                   for (let i = 0; i < 20; i++) {
                     await sleep(500);
+                    checkTimeout();
                     // Check if the input field is gone (dialog closed)
                     const input = document.querySelector('textarea[formcontrolname="newUrl"], input[placeholder*="http"]');
                     if (!input) return { success: true };
@@ -717,28 +733,34 @@ chrome.runtime.onMessage.addListener(
                   return { success: false, error: e.message || String(e) };
                 }
               },
-              args: [videoUrl],
+              args: [urlString],
             });
 
             const importResult = result?.result as any;
 
             if (importResult?.success) {
               await incrementUsage('imports');
+              const msg = urlCount === 1
+                ? 'YouTube video added to your NotebookLM notebook!'
+                : `Added ${urlCount} videos to your NotebookLM notebook!`;
               sendResponse({
                 success: true,
-                message: 'YouTube video added to your NotebookLM notebook!',
+                message: msg,
+                urlCount,
               });
             } else {
-              // Fallback: copy URL and tell user to paste manually
+              // Fallback: copy URL(s) and tell user to paste manually
               sendResponse({
                 success: false,
-                clipboardText: videoUrl,
+                clipboardText: urlString,
+                urlCount,
                 error: importResult?.error || 'Auto-import failed. URL copied to clipboard — paste manually in NotebookLM.',
               });
             }
           } catch (err) {
             sendResponse({
               success: false,
+              urlCount,
               error: `Quick import failed: ${err instanceof Error ? err.message : String(err)}`,
             });
           }
