@@ -666,18 +666,33 @@ chrome.runtime.onMessage.addListener(
 
                     if (inserted) break;
 
-                    // Strategy B: Find button by text/aria in any dialog/overlay
-                    const allBtns = document.querySelectorAll('button:not([disabled])');
-                    for (const btn of allBtns) {
-                      const txt = (btn.textContent?.trim() || '').toLowerCase();
-                      const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-                      if ((txt.includes('insert') || txt.includes('插入') ||
-                           label.includes('insert') || label.includes('submit') ||
-                           label.includes('add source') || label.includes('新增來源')) &&
-                          !txt.includes('cancel')) {
-                        (btn as HTMLElement).click();
-                        inserted = true;
-                        break;
+                    // Strategy B: Find the submit button by known selectors
+                    // NLM 2026 uses: .actions-enter-button with aria-label="提交"
+                    const submitByClass = document.querySelector(
+                      'button.actions-enter-button:not([disabled]), ' +
+                      'button[aria-label="提交"]:not([disabled]), ' +
+                      'button[aria-label="Submit"]:not([disabled]), ' +
+                      'button[aria-label="Insert"]:not([disabled])'
+                    ) as HTMLElement | null;
+                    if (submitByClass) {
+                      submitByClass.click();
+                      inserted = true;
+                    }
+
+                    if (!inserted) {
+                      // Strategy C: Find by text/aria fallback
+                      const allBtns = document.querySelectorAll('button:not([disabled])');
+                      for (const btn of allBtns) {
+                        const txt = (btn.textContent?.trim() || '').toLowerCase();
+                        const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+                        if ((txt.includes('insert') || txt.includes('插入') || txt.includes('提交') ||
+                             label.includes('insert') || label.includes('submit') || label.includes('提交') ||
+                             label.includes('add source') || label.includes('新增來源')) &&
+                            !txt.includes('cancel') && !txt.includes('close')) {
+                          (btn as HTMLElement).click();
+                          inserted = true;
+                          break;
+                        }
                       }
                     }
 
