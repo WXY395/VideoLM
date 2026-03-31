@@ -6,6 +6,14 @@ import { addMetadataHeader, type MetadataInput } from '@/processing/rag-optimize
 import { checkDuplicateByTitle } from '@/processing/duplicate-detector';
 import { getSettings, saveSettings, incrementUsage, checkQuota } from './usage-tracker';
 import { sanitizeYouTubeUrl, deduplicateUrls } from '@/utils/url-sanitizer';
+import {
+  createBatchQueue,
+  saveQueue,
+  loadQueue,
+  clearQueue,
+  advanceQueue,
+  MAX_BATCH_SIZE,
+} from './batch-queue';
 
 // ---------------------------------------------------------------------------
 // Pre-load config on service worker startup
@@ -905,6 +913,150 @@ chrome.runtime.onMessage.addListener(
               error: String(err),
             });
           }
+        })();
+        return true;
+      }
+
+      // -----------------------------------------------------------------------
+      // Batch Import — split large URL sets into ≤50 URL chunks
+      // -----------------------------------------------------------------------
+
+      case 'BATCH_IMPORT': {
+        (async () => {
+          try {
+            const { urls, pageTitle } = message;
+
+            if (!urls || urls.length === 0) {
+              sendResponse({ success: false, error: 'No URLs provided.' });
+              return;
+            }
+
+            if (urls.length <= MAX_BATCH_SIZE) {
+              // Small batch — delegate directly to QUICK_IMPORT logic
+              // Re-dispatch as QUICK_IMPORT (single paste of all URLs)
+              chrome.runtime.sendMessage(
+                { type: 'QUICK_IMPORT', videoUrl: urls, videoTitle: pageTitle },
+                (resp) => sendResponse(resp),
+              );
+              return;
+            }
+
+            // Large batch — create chunked queue
+            const queue = createBatchQueue(urls, pageTitle);
+            await saveQueue(queue);
+
+            // Process the first chunk via QUICK_IMPORT
+            const firstChunk = queue.chunks[0];
+            chrome.runtime.sendMessage(
+              { type: 'QUICK_IMPORT', videoUrl: firstChunk, videoTitle: pageTitle },
+              async (resp) => {
+                if (resp?.success) {
+                  const next = await advanceQueue();
+                  if (next) {
+                    sendResponse({
+                      success: true,
+                      needsNewNotebook: true,
+                      message: `Batch 1/${queue.chunks.length} complete (${firstChunk.length} videos). Please create a new notebook named "${pageTitle} - Part 2" and click "Continue Import".`,
+                      nextChunkSize: next.chunks[next.currentChunk].length,
+                      currentChunk: next.currentChunk,
+                      totalChunks: next.chunks.length,
+                    });
+                  } else {
+                    // Single chunk was enough after all
+                    sendResponse({
+                      success: true,
+                      message: `All ${queue.totalUrls} videos imported successfully.`,
+                    });
+                  }
+                } else {
+                  // First chunk failed — queue is still at chunk 0 for retry
+                  sendResponse({
+                    success: false,
+                    error: resp?.error || 'First batch failed.',
+                    currentChunk: 0,
+                    totalChunks: queue.chunks.length,
+                  });
+                }
+              },
+            );
+          } catch (err) {
+            sendResponse({
+              success: false,
+              error: `Batch import failed: ${err instanceof Error ? err.message : String(err)}`,
+            });
+          }
+        })();
+        return true;
+      }
+
+      case 'RESUME_BATCH': {
+        (async () => {
+          try {
+            const queue = await loadQueue();
+            if (!queue) {
+              sendResponse({ hasPending: false, success: false, error: 'No pending batch queue.' });
+              return;
+            }
+
+            const chunkIndex = queue.currentChunk;
+            const chunk = queue.chunks[chunkIndex];
+            const totalChunks = queue.chunks.length;
+            const partNumber = chunkIndex + 1;
+
+            // Process current chunk via QUICK_IMPORT
+            chrome.runtime.sendMessage(
+              { type: 'QUICK_IMPORT', videoUrl: chunk, videoTitle: queue.pageTitle },
+              async (resp) => {
+                if (resp?.success) {
+                  const next = await advanceQueue();
+                  if (next) {
+                    const nextPart = next.currentChunk + 1;
+                    sendResponse({
+                      success: true,
+                      needsNewNotebook: true,
+                      message: `Batch ${partNumber}/${totalChunks} complete (${chunk.length} videos). Please create a new notebook named "${queue.pageTitle} - Part ${nextPart}" and click "Continue Import".`,
+                      nextChunkSize: next.chunks[next.currentChunk].length,
+                      currentChunk: next.currentChunk,
+                      totalChunks,
+                    });
+                  } else {
+                    sendResponse({
+                      success: true,
+                      message: `All batches complete! ${queue.totalUrls} videos imported across ${totalChunks} notebooks.`,
+                    });
+                  }
+                } else {
+                  sendResponse({
+                    success: false,
+                    error: resp?.error || `Batch ${partNumber}/${totalChunks} failed. You can retry.`,
+                    currentChunk: chunkIndex,
+                    totalChunks,
+                  });
+                }
+              },
+            );
+          } catch (err) {
+            sendResponse({
+              success: false,
+              error: `Resume failed: ${err instanceof Error ? err.message : String(err)}`,
+            });
+          }
+        })();
+        return true;
+      }
+
+      case 'CHECK_PENDING_QUEUE': {
+        (async () => {
+          const queue = await loadQueue();
+          sendResponse({
+            hasPending: !!queue,
+            currentChunk: queue?.currentChunk ?? null,
+            totalChunks: queue?.chunks.length ?? null,
+            pageTitle: queue?.pageTitle ?? null,
+            remainingUrls: queue
+              ? queue.totalUrls - queue.currentChunk * MAX_BATCH_SIZE
+              : 0,
+          });
         })();
         return true;
       }
