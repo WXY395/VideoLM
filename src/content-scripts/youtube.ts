@@ -30,91 +30,118 @@ let cachedUrl = '';
 // ---------------------------------------------------------------------------
 
 /**
- * Get ytInitialPlayerResponse — works both on initial page load and SPA navigation.
+ * Get playerResponse for the current video.
  *
- * Strategy 1: YouTube player API (#movie_player.getPlayerResponse())
- *   - Works after SPA navigation (pushState)
- *   - Returns live, up-to-date data for the current video
+ * Content scripts are ISOLATED — they can't access page JS variables.
+ * We use a CustomEvent bridge: inject a script that reads player data
+ * and dispatches it as a DOM event that the content script can listen to.
  *
- * Strategy 2: Parse from page HTML (<script> tags)
- *   - Works on initial page load before player is ready
- *   - Data may be stale after SPA navigation
+ * If script injection fails (Trusted Types CSP), we fall back to parsing
+ * from HTML <script> tags (only works on initial page load, not SPA nav).
  */
-function getPlayerResponse(): any {
-  // Strategy 1: Player API (preferred — always current)
+let pendingPlayerResponse: any = null;
+
+// Listen for the bridge event from the injected script
+window.addEventListener('__videolm_pr__', ((e: CustomEvent) => {
+  pendingPlayerResponse = e.detail;
+}) as EventListener);
+
+function requestPlayerResponseFromPage(): void {
+  pendingPlayerResponse = null;
+
   try {
-    const player = document.querySelector('#movie_player') as any;
-    if (player && typeof player.getPlayerResponse === 'function') {
-      const pr = player.getPlayerResponse();
-      if (pr?.videoDetails?.videoId) {
-        return pr;
+    // Method 1: Inject script via blob URL (bypasses Trusted Types)
+    const code = `
+      (function() {
+        var pr = null;
+        try {
+          var player = document.querySelector('#movie_player');
+          if (player && player.getPlayerResponse) pr = player.getPlayerResponse();
+        } catch(e) {}
+        if (!pr) try { pr = window.ytInitialPlayerResponse; } catch(e) {}
+        if (pr) {
+          window.dispatchEvent(new CustomEvent('__videolm_pr__', { detail: {
+            videoId: pr.videoDetails?.videoId || '',
+            title: pr.videoDetails?.title || '',
+            author: pr.videoDetails?.author || '',
+            lengthSeconds: pr.videoDetails?.lengthSeconds || '0',
+            keywords: pr.videoDetails?.keywords || [],
+            captions: pr.captions || null,
+            playerOverlays: pr.playerOverlays || null,
+            microformat: pr.microformat || null,
+          }}));
+        }
+      })();
+    `;
+    const blob = new Blob([code], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
+    const script = document.createElement('script');
+    script.src = url;
+    script.onload = () => { script.remove(); URL.revokeObjectURL(url); };
+    document.documentElement.appendChild(script);
+  } catch {
+    // Method 2: Fall back to HTML parsing (initial load only)
+    try {
+      const scripts = document.querySelectorAll('script');
+      for (const s of scripts) {
+        const text = s.textContent || '';
+        if (!text.includes('ytInitialPlayerResponse')) continue;
+        const idx = text.indexOf('ytInitialPlayerResponse');
+        const after = text.indexOf('=', idx);
+        if (after === -1) continue;
+        const start = text.indexOf('{', after);
+        if (start === -1) continue;
+        let depth = 0, end = -1;
+        for (let i = start; i < text.length; i++) {
+          if (text[i] === '{') depth++;
+          else if (text[i] === '}') depth--;
+          if (depth === 0) { end = i + 1; break; }
+        }
+        if (end === -1) continue;
+        const pr = JSON.parse(text.substring(start, end));
+        pendingPlayerResponse = {
+          videoId: pr.videoDetails?.videoId || '',
+          title: pr.videoDetails?.title || '',
+          author: pr.videoDetails?.author || '',
+          lengthSeconds: pr.videoDetails?.lengthSeconds || '0',
+          keywords: pr.videoDetails?.keywords || [],
+          captions: pr.captions || null,
+          playerOverlays: pr.playerOverlays || null,
+          microformat: pr.microformat || null,
+        };
+        break;
       }
-    }
-  } catch { /* player not ready */ }
-
-  // Strategy 2: Parse from HTML (fallback for initial load)
-  try {
-    const scripts = document.querySelectorAll('script');
-    for (const script of scripts) {
-      const text = script.textContent || '';
-      if (!text.includes('ytInitialPlayerResponse')) continue;
-
-      const idx = text.indexOf('ytInitialPlayerResponse');
-      const afterName = text.indexOf('=', idx);
-      if (afterName === -1) continue;
-
-      const jsonStart = text.indexOf('{', afterName);
-      if (jsonStart === -1) continue;
-
-      let depth = 0;
-      let jsonEnd = -1;
-      for (let i = jsonStart; i < text.length; i++) {
-        if (text[i] === '{') depth++;
-        else if (text[i] === '}') depth--;
-        if (depth === 0) { jsonEnd = i + 1; break; }
-      }
-      if (jsonEnd === -1) continue;
-
-      return JSON.parse(text.substring(jsonStart, jsonEnd));
-    }
-  } catch (e) {
-    console.error('[VideoLM] Failed to parse ytInitialPlayerResponse', e);
+    } catch { /* HTML parsing also failed */ }
   }
-
-  return null;
 }
 
 /**
- * Wait until the player response matches the expected videoId.
- * After SPA navigation, the player briefly returns stale data from the previous video.
- * We poll every 300ms until the videoId matches or timeout.
+ * Get playerResponse, waiting for it to match the expected videoId.
  */
-async function waitForCorrectPlayerResponse(
+async function getPlayerResponseForVideo(
   expectedVideoId: string | null,
-  timeoutMs = 5000,
+  timeoutMs = 8000,
 ): Promise<any> {
   const startTime = Date.now();
 
   while (Date.now() - startTime < timeoutMs) {
-    const pr = getPlayerResponse();
+    requestPlayerResponseFromPage();
+    await sleep(300);
 
-    if (pr) {
-      const prVideoId = pr.videoDetails?.videoId;
-
-      // If we don't have an expected ID (URL parsing failed), accept any response
-      if (!expectedVideoId || prVideoId === expectedVideoId) {
-        return pr;
+    if (pendingPlayerResponse) {
+      if (!expectedVideoId || pendingPlayerResponse.videoId === expectedVideoId) {
+        return pendingPlayerResponse;
       }
-
-      // Player still has old video — wait and retry
-      console.log(`[VideoLM] Waiting for player to load video ${expectedVideoId} (currently ${prVideoId})`);
+      console.log(`[VideoLM] Player has ${pendingPlayerResponse.videoId}, waiting for ${expectedVideoId}`);
     }
 
-    await sleep(300);
+    await sleep(400);
   }
 
-  // Timeout — return whatever we have (better than nothing)
-  return getPlayerResponse();
+  // Last try
+  requestPlayerResponseFromPage();
+  await sleep(300);
+  return pendingPlayerResponse;
 }
 
 // ---------------------------------------------------------------------------
@@ -378,15 +405,27 @@ async function getVideoContent(): Promise<VideoContent | null> {
     // Extract expected videoId from URL
     const expectedVideoId = extractVideoId(currentUrl);
 
-    // Wait for player to load the correct video (critical for SPA navigation).
-    // After YouTube SPA navigation, the player may still have the OLD video's data
-    // for a brief moment. We poll until the player's videoId matches the URL.
-    const pr = await waitForCorrectPlayerResponse(expectedVideoId, 5000);
+    // Get playerResponse from MAIN world, waiting for correct videoId after SPA nav
+    const pr = await getPlayerResponseForVideo(expectedVideoId, 8000);
     if (!pr) return null;
 
-    const meta = extractVideoMetadata(pr);
-    const tracks = extractCaptionTracks(pr);
-    const rawChapters = extractChapters(pr);
+    // Build a playerResponse-like structure for our extractor functions
+    const playerResponseCompat = {
+      videoDetails: {
+        videoId: pr.videoId,
+        title: pr.title,
+        author: pr.author,
+        lengthSeconds: pr.lengthSeconds,
+        keywords: pr.keywords,
+      },
+      captions: pr.captions,
+      playerOverlays: pr.playerOverlays,
+      microformat: pr.microformat,
+    };
+
+    const meta = extractVideoMetadata(playerResponseCompat);
+    const tracks = extractCaptionTracks(playerResponseCompat);
+    const rawChapters = extractChapters(playerResponseCompat);
 
     // --- Two-tier transcript extraction ---
     let segments = await extractTranscriptTier1(pr);
