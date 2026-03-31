@@ -59,11 +59,27 @@ export function App() {
         videoContent: content,
         options: { mode: effectiveMode },
       },
-      (response) => {
+      async (response) => {
         setImporting(false);
-        if (response?.result) {
-          setResult(response.result as ImportResult);
-          // Mark all progress items as done on success
+
+        if (response?.success) {
+          // Copy processed content to clipboard
+          if (response.clipboardText) {
+            try {
+              await navigator.clipboard.writeText(response.clipboardText);
+            } catch {
+              // Clipboard write may fail — content is still in response
+            }
+          }
+
+          setResult({
+            success: true,
+            tier: 3,
+            manual: true,
+            message: response.message || 'Content copied to clipboard! Paste into NotebookLM as a "Copied text" source.',
+          });
+
+          // Mark progress items as done
           if (progress) {
             setProgress((prev) =>
               prev
@@ -75,6 +91,12 @@ export function App() {
                 : null
             );
           }
+        } else {
+          setResult({
+            success: false,
+            tier: 3,
+            error: response?.error || 'Import failed.',
+          });
         }
       }
     );
