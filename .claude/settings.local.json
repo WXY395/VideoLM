@@ -25,7 +25,9 @@
       "mcp__plugin_playwright_playwright__browser_snapshot",
       "mcp__plugin_playwright_playwright__browser_click",
       "Bash(npm test:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "WebFetch(domain:support.google.com)",
+      "WebFetch(domain:elephas.app)"
     ]
   }
 }

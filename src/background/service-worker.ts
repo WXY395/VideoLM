@@ -185,36 +185,104 @@ async function processAndImport(
 // ---------------------------------------------------------------------------
 
 /**
- * Get the current source count from the open NLM notebook.
- * Reads the "X/50" indicator or counts source items in the sidebar.
+ * Get the current source count and existing source URLs from the open NLM notebook.
+ * Returns { count, existingUrls, limit } for capacity checking and deduplication.
  */
-async function getNlmSourceCount(): Promise<number> {
+async function getNlmNotebookInfo(): Promise<{
+  count: number;
+  limit: number;
+  existingUrls: string[];
+}> {
   try {
     const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
-    if (!nlmTabs[0]?.id) return 0;
+    if (!nlmTabs[0]?.id) return { count: 0, limit: 50, existingUrls: [] };
 
     const [result] = await chrome.scripting.executeScript({
       target: { tabId: nlmTabs[0].id },
       world: 'MAIN' as any,
       func: () => {
-        // Method 1: Look for "X/50" progress indicator
-        const allText = document.body.innerText;
-        const match = allText.match(/(\d+)\s*\/\s*50/);
-        if (match) return parseInt(match[1], 10);
+        let count = 0;
+        let limit = 50; // Default free tier
 
-        // Method 2: Count source items in sidebar
-        const sources = document.querySelectorAll(
-          '.source-item, [class*="source-container"], [data-source-id]'
-        );
-        return sources.length;
+        // Method 1: Read "X 個來源" or "X sources" text in sidebar header
+        const sourceHeaders = document.querySelectorAll('[class*="source"]');
+        for (const el of sourceHeaders) {
+          const text = el.textContent || '';
+          // Match "50 個來源" or "50 sources" or "X/50"
+          const countMatch = text.match(/(\d+)\s*(?:個來源|sources)/i);
+          if (countMatch) { count = parseInt(countMatch[1], 10); break; }
+          const slashMatch = text.match(/(\d+)\s*\/\s*(\d+)/);
+          if (slashMatch) {
+            count = parseInt(slashMatch[1], 10);
+            limit = parseInt(slashMatch[2], 10);
+            break;
+          }
+        }
+
+        // Method 2: Count actual source link elements in sidebar
+        if (count === 0) {
+          const sourceItems = document.querySelectorAll(
+            'a[href*="youtube.com/watch"], a[href*="youtu.be"], [class*="source-item"], [class*="source-container"]'
+          );
+          count = sourceItems.length;
+        }
+
+        // Method 3: Check for "已達上限" (limit reached) warning
+        const bodyText = document.body.innerText;
+        if (bodyText.includes('已達上限') || bodyText.includes('limit reached')) {
+          // If limit warning visible, notebook is full
+          // Try to read the actual count from nearby text
+          const limitMatch = bodyText.match(/(\d+)\s*\/\s*(\d+)/);
+          if (limitMatch) {
+            count = parseInt(limitMatch[1], 10);
+            limit = parseInt(limitMatch[2], 10);
+          } else {
+            count = 50; // Assume full at default limit
+          }
+        }
+
+        // Collect existing YouTube URLs for deduplication
+        const existingUrls: string[] = [];
+        const allLinks = document.querySelectorAll('a[href*="youtube.com/watch"], a[href*="youtu.be"]');
+        allLinks.forEach(a => {
+          const href = a.getAttribute('href');
+          if (href) existingUrls.push(href);
+        });
+
+        // Also check source text content for YouTube URLs
+        const sourceElements = document.querySelectorAll('[class*="source"]');
+        sourceElements.forEach(el => {
+          const text = el.textContent || '';
+          const urlMatch = text.match(/youtube\.com\/watch\?v=[\w-]+/g);
+          if (urlMatch) urlMatch.forEach(u => existingUrls.push('https://www.' + u));
+        });
+
+        return { count, limit, existingUrls };
       },
       args: [],
     });
 
-    return (result?.result as number) || 0;
+    return (result?.result as any) || { count: 0, limit: 50, existingUrls: [] };
   } catch {
-    return 0;
+    return { count: 0, limit: 50, existingUrls: [] };
   }
+}
+
+/**
+ * Remove URLs that already exist in the NLM notebook (deduplication).
+ */
+function deduplicateAgainstExisting(urls: string[], existingUrls: string[]): string[] {
+  // Extract video IDs from existing URLs for comparison
+  const existingIds = new Set<string>();
+  for (const url of existingUrls) {
+    const match = url.match(/[?&]v=([\w-]+)/);
+    if (match) existingIds.add(match[1]);
+  }
+
+  return urls.filter(url => {
+    const match = url.match(/[?&]v=([\w-]+)/);
+    return match ? !existingIds.has(match[1]) : true;
+  });
 }
 
 /**
@@ -886,30 +954,44 @@ chrome.runtime.onMessage.addListener(
       case 'BATCH_IMPORT': {
         (async () => {
           try {
-            const { urls, pageTitle } = message as any;
-            if (!urls || urls.length === 0) {
+            const { urls: rawUrls, pageTitle } = message as any;
+            if (!rawUrls || rawUrls.length === 0) {
               sendResponse({ success: false, error: 'No URLs provided.' });
               return;
             }
 
-            // Check how many sources the current notebook already has
-            const currentCount = await getNlmSourceCount();
-            const availableSlots = Math.max(0, 50 - currentCount);
+            // Step 1: Get notebook capacity + existing URLs for deduplication
+            const nbInfo = await getNlmNotebookInfo();
+            const availableSlots = Math.max(0, nbInfo.limit - nbInfo.count);
 
-            if (availableSlots === 0) {
+            // Step 2: Deduplicate — remove URLs already in the notebook
+            const uniqueUrls = deduplicateAgainstExisting(rawUrls, nbInfo.existingUrls);
+            const removedDupes = rawUrls.length - uniqueUrls.length;
+
+            if (uniqueUrls.length === 0) {
               sendResponse({
-                success: false,
-                error: `This notebook is full (${currentCount}/50 sources). Please create a new notebook first.`,
+                success: true,
+                message: removedDupes > 0
+                  ? `All ${rawUrls.length} videos are already in this notebook. Nothing to import.`
+                  : 'No new videos to import.',
               });
               return;
             }
 
-            // Split: first batch fills remaining slots, rest goes to queue
-            const firstBatchSize = Math.min(urls.length, availableSlots);
-            const firstBatch = urls.slice(0, firstBatchSize);
-            const remaining = urls.slice(firstBatchSize);
+            if (availableSlots === 0) {
+              sendResponse({
+                success: false,
+                error: `This notebook is full (${nbInfo.count}/${nbInfo.limit} sources). Please create a new notebook first.`,
+              });
+              return;
+            }
 
-            // Import first batch
+            // Step 3: Split into what fits now vs what needs a new notebook
+            const firstBatchSize = Math.min(uniqueUrls.length, availableSlots);
+            const firstBatch = uniqueUrls.slice(0, firstBatchSize);
+            const remaining = uniqueUrls.slice(firstBatchSize);
+
+            // Step 4: Import first batch
             const result = await importUrlsToNlm(firstBatch);
 
             if (!result.success) {
@@ -917,26 +999,25 @@ chrome.runtime.onMessage.addListener(
               return;
             }
 
+            const dupeMsg = removedDupes > 0 ? ` (${removedDupes} duplicates skipped)` : '';
+
             if (remaining.length === 0) {
-              // All fit in current notebook
               sendResponse({
                 success: true,
-                message: `Added ${firstBatchSize} videos to your notebook!`,
+                message: `Added ${firstBatchSize} videos to your notebook!${dupeMsg}`,
               });
               return;
             }
 
-            // Save remaining URLs to queue for next notebook(s)
+            // Step 5: Save remaining to queue
             const queue = createBatchQueue(remaining, pageTitle);
             await saveQueue(queue);
 
-            const totalChunks = queue.chunks.length + 1; // +1 for the batch we just imported
             sendResponse({
               success: true,
               needsNewNotebook: true,
-              message: `Added ${firstBatchSize} videos (notebook full at 50). ${remaining.length} videos remaining — create a new notebook named "${pageTitle} - Part 2" and click "Resume Import".`,
+              message: `Added ${firstBatchSize} videos (notebook now ${nbInfo.count + firstBatchSize}/${nbInfo.limit}).${dupeMsg} ${remaining.length} videos remaining — create a new notebook named "${pageTitle} - Part 2" and click "Resume Import".`,
               remaining: remaining.length,
-              totalChunks,
             });
           } catch (err) {
             sendResponse({ success: false, error: String(err) });
