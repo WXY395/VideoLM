@@ -45,11 +45,39 @@ export function App() {
     ? FREE_MONTHLY_LIMIT - (settings.monthlyUsage?.imports ?? 0)
     : undefined;
 
-  // Check for pending batch queue on popup open
+  // Check for import status + pending queue on popup open
+  const [importStatus, setImportStatusState] = useState<any>(null);
+
   useEffect(() => {
+    // Check if there's an active or completed import
+    chrome.runtime.sendMessage({ type: 'GET_IMPORT_STATUS' }, (status) => {
+      if (status) {
+        setImportStatusState(status);
+        // If import is active, show as importing
+        if (status.active) {
+          setImporting(true);
+        }
+        // If completed with result, show the result
+        if (status.completed && status.completionMessage) {
+          setResult({
+            success: !status.lastError,
+            tier: 1,
+            message: status.completionMessage,
+            error: status.lastError,
+            manual: status.needsNewNotebook,
+          } as any);
+        }
+        // If needs new notebook, show resume prompt
+        if (status.needsNewNotebook && status.remainingCount) {
+          setPendingQueue({ remaining: status.remainingCount, pageTitle: status.pageTitle });
+        }
+      }
+    });
+
+    // Also check pending queue
     chrome.runtime.sendMessage({ type: 'CHECK_PENDING_QUEUE' }, (response) => {
-      if (response?.pending && response.remaining > 0) {
-        setPendingQueue({ remaining: response.remaining, pageTitle: response.pageTitle || 'Batch Import' });
+      if (response?.hasPending && response.remainingUrls > 0) {
+        setPendingQueue({ remaining: response.remainingUrls, pageTitle: response.pageTitle || 'Batch Import' });
       }
     });
   }, []);
@@ -72,25 +100,24 @@ export function App() {
         pageTitle,
       },
       (response) => {
-        setImporting(false);
-        if (response?.success) {
+        // The background responds immediately, then continues importing
+        if (response?.importing) {
+          // Import started in background — show badge progress
           setResult({
             success: true,
             tier: 1,
-            message: response.message || `Batch import started for ${urls.length} videos!`,
+            message: `Importing ${urls.length} videos in background... Check the extension badge for progress. You can close this popup.`,
           });
-          if (progress) {
-            setProgress((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    completed: prev.total,
-                    items: prev.items.map((it) => ({ ...it, status: 'done' as ProgressStatus })),
-                  }
-                : null
-            );
-          }
+          setImporting(false);
+        } else if (response?.success) {
+          setImporting(false);
+          setResult({
+            success: true,
+            tier: 1,
+            message: response.message,
+          });
         } else {
+          setImporting(false);
           setResult({
             success: false,
             tier: 3,
@@ -99,7 +126,7 @@ export function App() {
         }
       }
     );
-  }, [pageTitle, progress]);
+  }, [pageTitle]);
 
   const handleImportAll = useCallback(() => {
     handleBatchImport(batchUrls);
