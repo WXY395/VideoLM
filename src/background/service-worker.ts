@@ -367,68 +367,53 @@ async function importUrlsToNlm(urls: string[]): Promise<{
         }
 
         const sourcePath = `/notebook/${nbId}`;
-        let successCount = 0;
-        let lastError = '';
+        const lang = document.documentElement.lang || 'en';
 
-        // Add each URL as a source via the izAoDd RPC
-        for (let i = 0; i < videoUrls.length; i++) {
-          const videoUrl = videoUrls[i];
-          if (!videoUrl) continue;
-
-          // Build the f.req payload — matches the format captured from NLM
-          // Structure: [[["izAoDd", innerJson, null, "generic"]]]
+        // Helper: send one izAoDd request for a single URL
+        async function addSource(videoUrl: string): Promise<boolean> {
           const innerPayload = JSON.stringify([
             [[null, null, null, null, null, null, null, [videoUrl], null, null, 1]],
             nbId,
             [2],
             [1, null, null, null, null, null, null, null, null, [1]],
           ]);
-
           const fReq = JSON.stringify([[['izAoDd', innerPayload, null, 'generic']]]);
-
           const reqId = Math.floor(100000 + Math.random() * 900000);
 
-          const queryParams = new URLSearchParams({
-            'rpcids': 'izAoDd',
-            'source-path': sourcePath,
-            'bl': bl,
-            'f.sid': fSid,
-            'hl': document.documentElement.lang || 'en',
-            'authuser': authuser,
-            '_reqid': String(reqId),
-            'rt': 'c',
+          const qp = new URLSearchParams({
+            'rpcids': 'izAoDd', 'source-path': sourcePath, 'bl': bl,
+            'f.sid': fSid, 'hl': lang, 'authuser': authuser,
+            '_reqid': String(reqId), 'rt': 'c',
           });
+          const body = new URLSearchParams({ 'f.req': fReq, 'at': atToken });
 
-          const body = new URLSearchParams({
-            'f.req': fReq,
-            'at': atToken,
-          });
+          const resp = await fetch(
+            `https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?${qp}`,
+            { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }, credentials: 'include', body: body.toString() }
+          );
+          return resp.ok;
+        }
 
-          try {
-            const resp = await fetch(
-              `https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?${queryParams.toString()}`,
-              {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-                },
-                credentials: 'include',
-                body: body.toString(),
-              }
-            );
+        // Send requests in parallel batches of CONCURRENCY
+        // This is ~5x faster than sequential while being respectful to NLM
+        const CONCURRENCY = 5;
+        let successCount = 0;
+        let lastError = '';
+        const validUrls = videoUrls.filter(Boolean);
 
-            if (resp.ok) {
-              successCount++;
-            } else {
-              lastError = `HTTP ${resp.status} for ${videoUrl}`;
-            }
-          } catch (e: any) {
-            lastError = e.message || String(e);
+        for (let i = 0; i < validUrls.length; i += CONCURRENCY) {
+          const batch = validUrls.slice(i, i + CONCURRENCY);
+          const results = await Promise.allSettled(batch.map(u => addSource(u)));
+
+          for (const r of results) {
+            if (r.status === 'fulfilled' && r.value) successCount++;
+            else if (r.status === 'rejected') lastError = r.reason?.message || String(r.reason);
+            else lastError = 'Request failed';
           }
 
-          // Small delay between requests to be respectful to NLM's servers
-          if (i < videoUrls.length - 1) {
-            await new Promise(r => setTimeout(r, 500));
+          // Brief pause between parallel batches
+          if (i + CONCURRENCY < validUrls.length) {
+            await new Promise(r => setTimeout(r, 300));
           }
         }
 
