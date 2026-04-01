@@ -439,14 +439,11 @@ async function importUrlsToNlm(urls: string[]): Promise<{
           return { success: false, error: 'Insert button not found or disabled. URLs were pasted — click "插入" manually.' };
         }
 
-        // Step 5: Wait for NLM to process (sub-page closes or sources appear)
-        for (let i = 0; i < 60; i++) {
-          await sleep(1000);
-          checkTimeout();
-          // Check if the URL paste textarea is gone (sub-page closed)
-          const input = document.querySelector('textarea[formcontrolname="urls"]');
-          if (!input || (input as HTMLElement).offsetParent === null) return { success: true };
-        }
+        // Step 5: We clicked "插入" successfully — return immediately.
+        // NLM processes URLs in the background (sources show ⟳ then ✓).
+        // Don't wait for the dialog to close — it may stay open briefly.
+        // The "已達上限" warning is normal when notebook reaches 50/50.
+        await sleep(1000); // Brief wait for NLM to register the submission
         return { success: true };
       } catch (e: any) {
         return { success: false, error: e.message || String(e) };
