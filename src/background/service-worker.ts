@@ -14,6 +14,7 @@ import {
   advanceQueue,
   MAX_BATCH_SIZE,
 } from './batch-queue';
+import { setImportStatus, getImportStatus, clearImportStatus } from './import-status';
 
 // ---------------------------------------------------------------------------
 // Pre-load config on service worker startup
@@ -411,6 +412,12 @@ async function importUrlsToNlm(urls: string[]): Promise<{
             else lastError = 'Request failed';
           }
 
+          // Update badge with progress (visible even when popup is closed)
+          try {
+            chrome.action.setBadgeText({ text: `${successCount}/${validUrls.length}` });
+            chrome.action.setBadgeBackgroundColor({ color: '#1a73e8' });
+          } catch { /* badge API may not be available */ }
+
           // Brief pause between parallel batches
           if (i + CONCURRENCY < validUrls.length) {
             await new Promise(r => setTimeout(r, 300));
@@ -436,9 +443,16 @@ async function importUrlsToNlm(urls: string[]): Promise<{
 
   const importResult = result?.result as any;
 
+  // Clear badge on completion (show ✓ briefly)
+  try {
+    chrome.action.setBadgeText({ text: '✓' });
+    chrome.action.setBadgeBackgroundColor({ color: '#34a853' });
+    setTimeout(() => chrome.action.setBadgeText({ text: '' }), 8000);
+  } catch { /* ignore */ }
+
   if (importResult?.success) {
     await incrementUsage('imports');
-    const { successCount, total, failCount } = importResult;
+    const { successCount, failCount } = importResult;
     let msg = successCount === 1
       ? 'YouTube video added to your NotebookLM notebook!'
       : `Added ${successCount} videos to your NotebookLM notebook!`;
@@ -975,33 +989,52 @@ chrome.runtime.onMessage.addListener(
             const firstBatch = uniqueUrls.slice(0, firstBatchSize);
             const remaining = uniqueUrls.slice(firstBatchSize);
 
-            // Step 4: Import first batch
+            // Step 4: Set import status + import first batch
+            await setImportStatus({
+              active: true,
+              pageTitle,
+              totalUrls: uniqueUrls.length,
+              importedCount: 0,
+              phase: `Importing ${firstBatchSize} videos...`,
+              startedAt: Date.now(),
+            });
+
+            // Respond immediately so popup can show progress
+            sendResponse({ success: true, message: `Importing ${firstBatchSize} videos...`, importing: true });
+
+            // Do the actual import (popup may be closed by now, that's OK)
             const result = await importUrlsToNlm(firstBatch);
 
             if (!result.success) {
-              sendResponse(result);
+              await setImportStatus({
+                active: false, pageTitle, totalUrls: uniqueUrls.length,
+                importedCount: 0, phase: 'Failed', startedAt: Date.now(),
+                lastError: result.error, completed: true,
+              });
               return;
             }
 
             const dupeMsg = removedDupes > 0 ? ` (${removedDupes} duplicates skipped)` : '';
 
             if (remaining.length === 0) {
-              sendResponse({
-                success: true,
-                message: `Added ${firstBatchSize} videos to your notebook!${dupeMsg}`,
+              await setImportStatus({
+                active: false, pageTitle, totalUrls: uniqueUrls.length,
+                importedCount: firstBatchSize, phase: 'Done', startedAt: Date.now(),
+                completed: true,
+                completionMessage: `Added ${firstBatchSize} videos!${dupeMsg}`,
               });
               return;
             }
 
-            // Step 5: Save remaining to queue
+            // Step 5: Save remaining to queue + update status
             const queue = createBatchQueue(remaining, pageTitle);
             await saveQueue(queue);
 
-            sendResponse({
-              success: true,
-              needsNewNotebook: true,
-              message: `Added ${firstBatchSize} videos (notebook now ${nbInfo.count + firstBatchSize}/${nbInfo.limit}).${dupeMsg} ${remaining.length} videos remaining — create a new notebook named "${pageTitle} - Part 2" and click "Resume Import".`,
-              remaining: remaining.length,
+            await setImportStatus({
+              active: false, pageTitle, totalUrls: uniqueUrls.length,
+              importedCount: firstBatchSize, phase: 'Waiting for new notebook', startedAt: Date.now(),
+              completed: true, needsNewNotebook: true, remainingCount: remaining.length,
+              completionMessage: `Added ${firstBatchSize} videos.${dupeMsg} ${remaining.length} remaining — create "${pageTitle} - Part 2" and click Resume.`,
             });
           } catch (err) {
             sendResponse({ success: false, error: String(err) });
@@ -1058,6 +1091,16 @@ chrome.runtime.onMessage.addListener(
               : 0,
           });
         })();
+        return true;
+      }
+
+      case 'GET_IMPORT_STATUS' as any: {
+        getImportStatus().then(status => sendResponse(status));
+        return true;
+      }
+
+      case 'CLEAR_IMPORT_STATUS' as any: {
+        clearImportStatus().then(() => sendResponse({ ok: true }));
         return true;
       }
 
