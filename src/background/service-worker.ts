@@ -339,114 +339,100 @@ async function importUrlsToNlm(urls: string[]): Promise<{
     return { success: false, urlCount, error: 'Cannot extract notebook ID from URL.' };
   }
 
-  // Step 1: Read session data from NLM page (one quick MAIN world call)
-  const [sessionResult] = await chrome.scripting.executeScript({
-    target: { tabId: nlmTabId },
-    world: 'MAIN' as any,
-    func: () => {
-      const wizData = (window as any).WIZ_global_data || {};
-      const urlParams = new URLSearchParams(window.location.search);
-      let authuser = urlParams.get('authuser') || '0';
-      const match = document.cookie.match(/authuser=(\d+)/);
-      if (match) authuser = match[1];
+  // ═══════════════════════════════════════════════════════════════
+  // Direct API approach — same as competitor (200K+ users)
+  // Fetch NLM homepage to get session tokens, then POST batchexecute
+  // directly from the service worker. No executeScript needed!
+  // ═══════════════════════════════════════════════════════════════
 
-      return {
-        fSid: wizData.FdrFJe || '',
-        atToken: wizData.SNlM0e || '',
-        bl: wizData.cfb2h || '',
-        authuser,
-        lang: document.documentElement.lang || 'en',
-      };
-    },
-    args: [],
-  });
+  // Extract authuser from the NLM tab URL
+  const nlmUrlObj = new URL(nlmUrl);
+  const authuser = nlmUrlObj.searchParams.get('authuser') || '';
+  const authuserParam = authuser ? `?authuser=${authuser}&pageId=none` : '';
 
-  const session = sessionResult?.result as any;
-  if (!session?.atToken) {
-    return { success: false, urlCount, error: 'Cannot read NLM session. Try refreshing NLM page.' };
+  // Step 1: Fetch NLM homepage to get fresh session tokens (bl, at)
+  let bl = '';
+  let atToken = '';
+
+  try {
+    const homepageResp = await fetch(
+      `https://notebooklm.google.com/${authuserParam}`,
+      { redirect: 'error' }
+    );
+    if (!homepageResp.ok) {
+      return { success: false, urlCount, error: 'Cannot connect to NotebookLM. Please check your login.' };
+    }
+    const html = await homepageResp.text();
+
+    // Extract tokens from HTML (same regex as competitor)
+    const blMatch = html.match(/"cfb2h":"([^"]+)"/);
+    const atMatch = html.match(/"SNlM0e":"([^"]+)"/);
+    bl = blMatch ? blMatch[1] : '';
+    atToken = atMatch ? atMatch[1] : '';
+  } catch (e) {
+    return { success: false, urlCount, error: 'Cannot reach NotebookLM. Please check your login.' };
   }
 
-  // Step 2: Send API calls in batches of CHUNK_SIZE via MAIN world
-  // Each executeScript handles a small batch (fast, ~2-3s) to avoid
-  // being killed by page navigation. The SW loop is stable.
-  const CHUNK_SIZE = 10;
+  if (!bl || !atToken) {
+    return { success: false, urlCount, error: 'Cannot read NLM session tokens. Please refresh NotebookLM.' };
+  }
+
+  // Step 2: Build sources array — ALL URLs in one API call (like competitor)
   const validUrls = urls.filter(Boolean);
+  const sources = validUrls.map(url =>
+    url.includes('youtube.com')
+      ? [null, null, null, null, null, null, null, [url]]   // YouTube URL
+      : [null, null, [url]]                                  // Website URL
+  );
+
+  console.log(`[VideoLM] Sending ${validUrls.length} URLs to notebook ${notebookId} via batchexecute`);
+
+  try {
+    chrome.action.setBadgeText({ text: `${validUrls.length}` });
+    chrome.action.setBadgeBackgroundColor({ color: '#1a73e8' });
+  } catch { /* ignore */ }
+
+  // Step 3: Single batchexecute call with ALL sources
+  const rpcId = 'izAoDd';
+  const reqId = Math.floor(100000 + Math.random() * 900000);
+  const qp = new URLSearchParams({
+    'rpcids': rpcId,
+    'source-path': `/notebook/${notebookId}`,
+    'bl': bl,
+    '_reqid': String(reqId),
+    'rt': 'c',
+  });
+  if (authuser) qp.append('authuser', authuser);
+
+  const fReq = JSON.stringify([[[rpcId, JSON.stringify([sources, notebookId]), null, 'generic']]]);
+  const body = new URLSearchParams({ 'f.req': fReq, 'at': atToken });
+
   let totalSuccess = 0;
   let lastError = '';
 
-  console.log(`[VideoLM] Starting import of ${validUrls.length} URLs to notebook ${notebookId}`);
-
-  for (let i = 0; i < validUrls.length; i += CHUNK_SIZE) {
-    const chunk = validUrls.slice(i, i + CHUNK_SIZE);
-
-    try {
-      const [r] = await chrome.scripting.executeScript({
-        target: { tabId: nlmTabId },
-        world: 'MAIN' as any,
-        func: async (videoUrls: string[], nbId: string, s: any) => {
-          let ok = 0;
-          let err = '';
-          const PARALLEL = 5;
-
-          async function addOne(url: string): Promise<boolean> {
-            const inner = JSON.stringify([
-              [[null, null, null, null, null, null, null, [url], null, null, 1]],
-              nbId, [2], [1, null, null, null, null, null, null, null, null, [1]],
-            ]);
-            const fReq = JSON.stringify([[['izAoDd', inner, null, 'generic']]]);
-            const qp = new URLSearchParams({
-              'rpcids': 'izAoDd', 'source-path': `/notebook/${nbId}`, 'bl': s.bl,
-              'f.sid': s.fSid, 'hl': s.lang, 'authuser': s.authuser,
-              '_reqid': String(Math.floor(100000 + Math.random() * 900000)), 'rt': 'c',
-            });
-            const body = new URLSearchParams({ 'f.req': fReq, 'at': s.atToken });
-            const resp = await fetch(
-              `https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?${qp}`,
-              { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-                credentials: 'include', body: body.toString() }
-            );
-            return resp.ok;
-          }
-
-          // Process in parallel sub-batches of PARALLEL
-          for (let j = 0; j < videoUrls.length; j += PARALLEL) {
-            const batch = videoUrls.slice(j, j + PARALLEL);
-            const results = await Promise.allSettled(batch.map(u => addOne(u)));
-            for (const r of results) {
-              if (r.status === 'fulfilled' && r.value) ok++;
-              else err = r.status === 'rejected' ? String(r.reason) : 'failed';
-            }
-          }
-
-          return { ok, err };
-        },
-        args: [chunk, notebookId, session],
-      });
-
-      const chunkResult = r?.result as any;
-      if (chunkResult) {
-        totalSuccess += chunkResult.ok || 0;
-        if (chunkResult.err) lastError = chunkResult.err;
+  try {
+    const resp = await fetch(
+      `https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?${qp.toString()}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
       }
-    } catch (e) {
-      console.log(`[VideoLM] Chunk ${Math.floor(i / CHUNK_SIZE) + 1} failed:`, e);
-      lastError = String(e);
+    );
+
+    if (resp.ok) {
+      totalSuccess = validUrls.length;
+      console.log(`[VideoLM] batchexecute success — ${totalSuccess} sources submitted`);
+    } else {
+      lastError = `batchexecute returned ${resp.status}`;
+      console.log(`[VideoLM] batchexecute failed: ${resp.status}`);
     }
-
-    console.log(`[VideoLM] Progress: ${totalSuccess}/${validUrls.length}`);
-
-    try {
-      chrome.action.setBadgeText({ text: `${totalSuccess}/${validUrls.length}` });
-      chrome.action.setBadgeBackgroundColor({ color: '#1a73e8' });
-    } catch { /* badge not available */ }
-
-    // Brief pause between chunks
-    if (i + CHUNK_SIZE < validUrls.length) {
-      await new Promise(r => setTimeout(r, 500));
-    }
+  } catch (e) {
+    lastError = String(e);
+    console.log(`[VideoLM] batchexecute error:`, e);
   }
 
-  console.log(`[VideoLM] Import complete: ${totalSuccess}/${validUrls.length} succeeded`);
+  console.log(`[VideoLM] Import complete: ${totalSuccess}/${validUrls.length}`);
 
   // Clear badge on completion
   try {
