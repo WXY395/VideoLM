@@ -51,7 +51,28 @@ export async function setImportStatus(status: ImportStatus): Promise<void> {
 
 export async function getImportStatus(): Promise<ImportStatus | null> {
   const result = await chrome.storage.local.get(STATUS_KEY);
-  return (result[STATUS_KEY] as ImportStatus) ?? null;
+  const status = (result[STATUS_KEY] as ImportStatus) ?? null;
+
+  // Auto-expire completed statuses after 60 seconds
+  // This prevents stale "Importing..." or "Complete" messages from blocking the UI
+  if (status && !status.active) {
+    const age = Date.now() - status.startedAt;
+    if (age > 60_000) {
+      await clearImportStatus();
+      return null;
+    }
+  }
+
+  // Auto-expire active statuses that seem stuck (>5 minutes)
+  if (status?.active) {
+    const age = Date.now() - status.startedAt;
+    if (age > 300_000) {
+      await clearImportStatus();
+      return null;
+    }
+  }
+
+  return status;
 }
 
 export async function clearImportStatus(): Promise<void> {
