@@ -287,8 +287,13 @@ function deduplicateAgainstExisting(urls: string[], existingUrls: string[]): str
 
 /**
  * Import YouTube URLs into the currently-open NLM notebook.
- * All URLs are pasted at once (NLM supports multi-URL paste).
- * Competitor extensions paste 50 URLs at once successfully.
+ *
+ * Uses NLM's internal batchexecute API (izAoDd RPC) directly — NO UI automation.
+ * This is the same approach used by competing 200K+ user extensions.
+ *
+ * Each URL is added via a direct POST to the batchexecute endpoint,
+ * using session credentials from the NLM page. Zero UI interference,
+ * no "已達上限" warnings, ~500ms per source.
  */
 async function importUrlsToNlm(urls: string[]): Promise<{
   success: boolean;
@@ -297,16 +302,19 @@ async function importUrlsToNlm(urls: string[]): Promise<{
   message?: string;
   clipboardText?: string;
 }> {
-  const urlString = urls.join('\n');
   const urlCount = urls.length;
 
-  // Find an open NotebookLM tab
+  if (urls.length === 0 || urls.every(u => !u)) {
+    return { success: false, error: 'No URLs provided.', urlCount: 0 };
+  }
+
+  // Find an open NotebookLM tab in a notebook
   const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
 
   if (nlmTabs.length === 0 || !nlmTabs[0].id) {
     await chrome.tabs.create({ url: 'https://notebooklm.google.com/', active: true });
     return {
-      success: false, clipboardText: urlString, urlCount,
+      success: false, clipboardText: urls.join('\n'), urlCount,
       error: 'Please open a notebook in NotebookLM first, then try again.',
     };
   }
@@ -317,153 +325,146 @@ async function importUrlsToNlm(urls: string[]): Promise<{
   if (!nlmUrl.includes('/notebook/')) {
     await chrome.tabs.update(nlmTabId, { active: true });
     return {
-      success: false, clipboardText: urlString, urlCount,
+      success: false, clipboardText: urls.join('\n'), urlCount,
       error: 'Please open a specific notebook in NotebookLM, then try again.',
     };
   }
 
-  // Execute DOM automation on the NLM tab
+  // Extract notebook ID from URL: /notebook/UUID
+  const nbMatch = nlmUrl.match(/\/notebook\/([a-f0-9-]+)/);
+  const notebookId = nbMatch ? nbMatch[1] : '';
+
+  if (!notebookId) {
+    return { success: false, urlCount, error: 'Cannot extract notebook ID from URL.' };
+  }
+
+  // Execute in MAIN world to access NLM's session data and make API calls
   const [result] = await chrome.scripting.executeScript({
     target: { tabId: nlmTabId },
     world: 'MAIN' as any,
-    func: async (url: string) => {
-      const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
-      const startTime = Date.now();
-      const TIMEOUT_MS = 30_000;
-      const checkTimeout = () => {
-        if (Date.now() - startTime > TIMEOUT_MS) throw new Error('NLM processing timed out after 30 seconds.');
-      };
-
-      function findEl(selectors: string[]): HTMLElement | null {
-        for (const sel of selectors) {
-          const el = document.querySelector(sel) as HTMLElement;
-          if (el && el.offsetParent !== null) return el;
-        }
-        return null;
-      }
-
-      function findByText(selector: string, texts: string[]): HTMLElement | null {
-        const els = document.querySelectorAll(selector);
-        for (const el of els) {
-          const t = el.textContent?.trim().toLowerCase() || '';
-          if (texts.some(txt => t.includes(txt.toLowerCase()))) return el as HTMLElement;
-        }
-        return null;
-      }
-
-      function safeInput(el: HTMLTextAreaElement | HTMLInputElement, value: string) {
-        el.focus();
-        el.value = value;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        el.dispatchEvent(new Event('blur', { bubbles: true }));
-      }
-
+    func: async (videoUrls: string[], nbId: string) => {
       try {
-        // ══════════════════════════════════════════════════════════════
-        // NLM 2026 UI: "新增來源" dialog with tab buttons at bottom
-        //   Input: textarea[formcontrolname="discoverSourcesQuery"]
-        //   Tabs: "upload上傳檔案" | "linkvideo_youtube網站" | "drive雲端硬碟" | "content_paste複製的文字"
-        //   Submit: button.actions-enter-button (aria-label="提交")
-        // ══════════════════════════════════════════════════════════════
+        // Extract session parameters from NLM page
+        // f.sid: from WIZ_global_data.FdrFJe or page scripts
+        // at: CSRF token from WIZ_global_data.SNlM0e
+        // bl: build label from WIZ_global_data.cfb2h
+        const wizData = (window as any).WIZ_global_data || {};
+        const fSid = wizData.FdrFJe || '';
+        const atToken = wizData.SNlM0e || '';
+        const bl = wizData.cfb2h || '';
 
-        // Step 1: Click "新增來源" / "Add source" button (if dialog not already open)
-        const existingInput = findEl([
-          'textarea[formcontrolname="discoverSourcesQuery"]',
-          'textarea[formcontrolname="newUrl"]',
-        ]);
-        if (!existingInput) {
-          const addBtn = findEl(['button[aria-label*="Add"]', '.add-source-button'])
-            || findByText('button', ['add source', 'add sources', '新增來源', '添加来源', '新增']);
-          if (!addBtn) return { success: false, error: 'Cannot find "Add Source" button.' };
-          addBtn.click();
-          await sleep(1000);
+        if (!atToken) {
+          return { success: false, error: 'Cannot read NLM session token. Try refreshing the NotebookLM page.' };
         }
 
-        // Step 2: Click "🔗 網站" tab to open the URL paste sub-page
-        // NLM 2026 has tab buttons: 上傳檔案 | 網站 | 雲端硬碟 | 複製的文字
-        const websiteTab = findByText('button', ['linkvideo_youtube', '網站', 'website']);
-        if (websiteTab) {
-          websiteTab.click();
-          await sleep(800);
+        // Get authuser from URL or cookies
+        const urlParams = new URLSearchParams(window.location.search);
+        let authuser = urlParams.get('authuser') || '0';
+        // Also try from the page's cookie
+        if (authuser === '0') {
+          const match = document.cookie.match(/authuser=(\d+)/);
+          if (match) authuser = match[1];
         }
 
-        // Step 3: Find the URL paste textarea
-        // After clicking "網站" tab, a sub-page appears with:
-        //   textarea[formcontrolname="urls"] placeholder="貼上任何連結"
-        //   "如要新增多個網站，請以空格或換行分隔"
-        //   「插入」button at bottom-right
-        const urlInput = findEl([
-          'textarea[formcontrolname="urls"]',           // NLM 2026 URL paste page
-          'textarea[placeholder*="貼上任何連結"]',        // NLM 2026 zh-TW
-          'textarea[placeholder*="Paste any link"]',     // NLM 2026 en
-          'textarea[formcontrolname="newUrl"]',          // Legacy
-          'textarea[formcontrolname="discoverSourcesQuery"]', // NLM search bar
-        ]) as HTMLTextAreaElement | HTMLInputElement | null;
+        const sourcePath = `/notebook/${nbId}`;
+        let successCount = 0;
+        let lastError = '';
 
-        if (!urlInput) {
-          return { success: false, error: 'Cannot find URL paste field. Make sure "網站" tab is selected.' };
-        }
+        // Add each URL as a source via the izAoDd RPC
+        for (let i = 0; i < videoUrls.length; i++) {
+          const videoUrl = videoUrls[i];
+          if (!videoUrl) continue;
 
-        safeInput(urlInput, url);
-        await sleep(500);
+          // Build the f.req payload — matches the format captured from NLM
+          // Structure: [[["izAoDd", innerJson, null, "generic"]]]
+          const innerPayload = JSON.stringify([
+            [[null, null, null, null, null, null, null, [videoUrl], null, null, 1]],
+            nbId,
+            [2],
+            [1, null, null, null, null, null, null, null, null, [1]],
+          ]);
 
-        // Step 4: Click "插入" (Insert) button
-        let inserted = false;
-        for (let attempt = 0; attempt < 10; attempt++) {
-          await sleep(500);
-          checkTimeout();
+          const fReq = JSON.stringify([[['izAoDd', innerPayload, null, 'generic']]]);
 
-          // Strategy A: Find "插入"/"Insert" button by text
-          const insertBtn = findByText('button', ['插入', 'insert', 'Insert']);
-          if (insertBtn && !(insertBtn as HTMLButtonElement).disabled) {
-            insertBtn.click();
-            inserted = true;
-            break;
+          const reqId = Math.floor(100000 + Math.random() * 900000);
+
+          const queryParams = new URLSearchParams({
+            'rpcids': 'izAoDd',
+            'source-path': sourcePath,
+            'bl': bl,
+            'f.sid': fSid,
+            'hl': document.documentElement.lang || 'en',
+            'authuser': authuser,
+            '_reqid': String(reqId),
+            'rt': 'c',
+          });
+
+          const body = new URLSearchParams({
+            'f.req': fReq,
+            'at': atToken,
+          });
+
+          try {
+            const resp = await fetch(
+              `https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?${queryParams.toString()}`,
+              {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                },
+                credentials: 'include',
+                body: body.toString(),
+              }
+            );
+
+            if (resp.ok) {
+              successCount++;
+            } else {
+              lastError = `HTTP ${resp.status} for ${videoUrl}`;
+            }
+          } catch (e: any) {
+            lastError = e.message || String(e);
           }
 
-          // Strategy B: Known class selector
-          const submitBtn = document.querySelector(
-            'button.actions-enter-button:not([disabled]), ' +
-            'button[aria-label="提交"]:not([disabled]), ' +
-            'button[aria-label="Insert"]:not([disabled])'
-          ) as HTMLElement | null;
-          if (submitBtn) {
-            submitBtn.click();
-            inserted = true;
-            break;
+          // Small delay between requests to be respectful to NLM's servers
+          if (i < videoUrls.length - 1) {
+            await new Promise(r => setTimeout(r, 500));
           }
         }
 
-        if (!inserted) {
-          return { success: false, error: 'Insert button not found or disabled. URLs were pasted — click "插入" manually.' };
+        if (successCount === 0) {
+          return { success: false, error: lastError || 'All API calls failed.' };
         }
 
-        // Step 5: We clicked "插入" successfully — return immediately.
-        // NLM processes URLs in the background (sources show ⟳ then ✓).
-        // Don't wait for the dialog to close — it may stay open briefly.
-        // The "已達上限" warning is normal when notebook reaches 50/50.
-        await sleep(1000); // Brief wait for NLM to register the submission
-        return { success: true };
+        return {
+          success: true,
+          successCount,
+          total: videoUrls.length,
+          failCount: videoUrls.length - successCount,
+        };
       } catch (e: any) {
         return { success: false, error: e.message || String(e) };
       }
     },
-    args: [urlString],
+    args: [urls, notebookId],
   });
 
   const importResult = result?.result as any;
 
   if (importResult?.success) {
     await incrementUsage('imports');
-    const msg = urlCount === 1
+    const { successCount, total, failCount } = importResult;
+    let msg = successCount === 1
       ? 'YouTube video added to your NotebookLM notebook!'
-      : `Added ${urlCount} videos to your NotebookLM notebook!`;
-    return { success: true, message: msg, urlCount };
+      : `Added ${successCount} videos to your NotebookLM notebook!`;
+    if (failCount > 0) {
+      msg += ` (${failCount} failed)`;
+    }
+    return { success: true, message: msg, urlCount: successCount };
   } else {
     return {
-      success: false, clipboardText: urlString, urlCount,
-      error: importResult?.error || 'Auto-import failed. URLs copied to clipboard.',
+      success: false, clipboardText: urls.join('\n'), urlCount,
+      error: importResult?.error || 'API import failed.',
     };
   }
 }
