@@ -29,7 +29,9 @@
       "WebFetch(domain:support.google.com)",
       "WebFetch(domain:elephas.app)",
       "Bash(grep -oE '.{0,100}\\(continuation|continuationCommand|browse_ajax|ytInitialData|InnerTubeAPI\\).{0,100}' build/app.js)",
-      "Bash(grep -oE '.{0,150}\\(browse|continuation.*token|INNERTUBE_CONTEXT|ytInitialData\\).{0,150}' build/app.js)"
+      "Bash(grep -oE '.{0,150}\\(browse|continuation.*token|INNERTUBE_CONTEXT|ytInitialData\\).{0,150}' build/app.js)",
+      "Bash(grep -oE '.{0,60}CCqFvf.{0,120}' build/background.js)",
+      "Bash(grep -oE '.{0,30}CCqFvf.{0,200}' build/background.js)"
     ]
   }
 }

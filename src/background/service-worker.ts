@@ -532,6 +532,7 @@ async function runAutoSplitImport(
   pageTitle: string,
   existingCount: number,
   limit: number,
+  authuser = '',
 ): Promise<void> {
   const availableSlots = Math.max(0, limit - existingCount);
   const firstBatch = urls.slice(0, availableSlots);
@@ -572,7 +573,7 @@ async function runAutoSplitImport(
     });
 
     // Create new notebook via direct API (no tab needed)
-    const newNbId = await createNlmNotebook(`${pageTitle} - Part ${partNumber}`);
+    const newNbId = await createNlmNotebook(`${pageTitle} - Part ${partNumber}`, authuser);
     if (!newNbId) {
       const queue = createBatchQueue(remainingUrls.length > 0 ? [...chunk, ...remainingUrls] : chunk, pageTitle);
       await saveQueue(queue);
@@ -1144,9 +1145,15 @@ chrome.runtime.onMessage.addListener(
               message: `Importing ${uniqueUrls.length} videos in background...${dupeMsg} You can close this popup.`,
             });
 
+            // Get authuser from NLM tab for multi-account support
+            const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
+            let authuser = '';
+            if (nlmTabs[0]?.url) {
+              try { authuser = new URL(nlmTabs[0].url).searchParams.get('authuser') || ''; } catch {}
+            }
+
             // Run full auto-split import in background
-            // This creates new notebooks automatically when needed
-            await runAutoSplitImport(uniqueUrls, pageTitle, nbInfo.count, nbInfo.limit);
+            await runAutoSplitImport(uniqueUrls, pageTitle, nbInfo.count, nbInfo.limit, authuser);
 
           } catch (err) {
             sendResponse({ success: false, error: String(err) });
