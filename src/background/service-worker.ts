@@ -373,38 +373,46 @@ async function importUrlsToNlm(urls: string[]): Promise<{
   let lastError = '';
   const validUrls = urls.filter(Boolean);
 
-  async function addOneSource(videoUrl: string): Promise<boolean> {
-    try {
-      const [r] = await chrome.scripting.executeScript({
-        target: { tabId: nlmTabId },
-        world: 'MAIN' as any,
-        func: async (url: string, nbId: string, s: any) => {
-          const innerPayload = JSON.stringify([
-            [[null, null, null, null, null, null, null, [url], null, null, 1]],
-            nbId, [2], [1, null, null, null, null, null, null, null, null, [1]],
-          ]);
-          const fReq = JSON.stringify([[['izAoDd', innerPayload, null, 'generic']]]);
-          const reqId = Math.floor(100000 + Math.random() * 900000);
-          const qp = new URLSearchParams({
-            'rpcids': 'izAoDd', 'source-path': `/notebook/${nbId}`, 'bl': s.bl,
-            'f.sid': s.fSid, 'hl': s.lang, 'authuser': s.authuser,
-            '_reqid': String(reqId), 'rt': 'c',
-          });
-          const body = new URLSearchParams({ 'f.req': fReq, 'at': s.atToken });
-          const resp = await fetch(
-            `https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?${qp}`,
-            { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-              credentials: 'include', body: body.toString() }
-          );
-          return resp.ok;
-        },
-        args: [videoUrl, notebookId, session],
-      });
-      return r?.result === true;
-    } catch {
-      return false;
+  async function addOneSource(videoUrl: string, retries = 2): Promise<boolean> {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const [r] = await chrome.scripting.executeScript({
+          target: { tabId: nlmTabId },
+          world: 'MAIN' as any,
+          func: async (url: string, nbId: string, s: any) => {
+            const innerPayload = JSON.stringify([
+              [[null, null, null, null, null, null, null, [url], null, null, 1]],
+              nbId, [2], [1, null, null, null, null, null, null, null, null, [1]],
+            ]);
+            const fReq = JSON.stringify([[['izAoDd', innerPayload, null, 'generic']]]);
+            const reqId = Math.floor(100000 + Math.random() * 900000);
+            const qp = new URLSearchParams({
+              'rpcids': 'izAoDd', 'source-path': `/notebook/${nbId}`, 'bl': s.bl,
+              'f.sid': s.fSid, 'hl': s.lang, 'authuser': s.authuser,
+              '_reqid': String(reqId), 'rt': 'c',
+            });
+            const body = new URLSearchParams({ 'f.req': fReq, 'at': s.atToken });
+            const resp = await fetch(
+              `https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?${qp}`,
+              { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+                credentials: 'include', body: body.toString() }
+            );
+            return resp.ok;
+          },
+          args: [videoUrl, notebookId, session],
+        });
+        if (r?.result === true) return true;
+      } catch (e) {
+        console.log(`[VideoLM] addSource attempt ${attempt + 1} failed for ${videoUrl}:`, e);
+        if (attempt < retries) {
+          await new Promise(r => setTimeout(r, 1000)); // Wait before retry
+        }
+      }
     }
+    return false;
   }
+
+  console.log(`[VideoLM] Starting import of ${validUrls.length} URLs to notebook ${notebookId}`);
 
   for (let i = 0; i < validUrls.length; i += CONCURRENCY) {
     const batch = validUrls.slice(i, i + CONCURRENCY);
@@ -416,6 +424,8 @@ async function importUrlsToNlm(urls: string[]): Promise<{
       else lastError = 'Request failed';
     }
 
+    console.log(`[VideoLM] Progress: ${successCount}/${validUrls.length} (batch ${Math.floor(i / CONCURRENCY) + 1})`);
+
     try {
       chrome.action.setBadgeText({ text: `${successCount}/${validUrls.length}` });
       chrome.action.setBadgeBackgroundColor({ color: '#1a73e8' });
@@ -425,6 +435,8 @@ async function importUrlsToNlm(urls: string[]): Promise<{
       await new Promise(r => setTimeout(r, 300));
     }
   }
+
+  console.log(`[VideoLM] Import complete: ${successCount}/${validUrls.length} succeeded`);
 
   const result = successCount > 0
     ? { success: true, successCount, total: validUrls.length, failCount: validUrls.length - successCount }
