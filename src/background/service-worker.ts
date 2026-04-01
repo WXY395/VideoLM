@@ -296,7 +296,7 @@ function deduplicateAgainstExisting(urls: string[], existingUrls: string[]): str
  * using session credentials from the NLM page. Zero UI interference,
  * no "已達上限" warnings, ~500ms per source.
  */
-async function importUrlsToNlm(urls: string[]): Promise<{
+async function importUrlsToNlm(urls: string[], targetNotebookId?: string): Promise<{
   success: boolean;
   error?: string;
   urlCount: number;
@@ -309,34 +309,38 @@ async function importUrlsToNlm(urls: string[]): Promise<{
     return { success: false, error: 'No URLs provided.', urlCount: 0 };
   }
 
-  // Find an open NotebookLM tab in a notebook
-  const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
-
-  if (nlmTabs.length === 0 || !nlmTabs[0].id) {
-    await chrome.tabs.create({ url: 'https://notebooklm.google.com/', active: true });
-    return {
-      success: false, clipboardText: urls.join('\n'), urlCount,
-      error: 'Please open a notebook in NotebookLM first, then try again.',
-    };
-  }
-
-  const nlmTabId = nlmTabs[0].id;
-  const nlmUrl = nlmTabs[0].url || '';
-
-  if (!nlmUrl.includes('/notebook/')) {
-    await chrome.tabs.update(nlmTabId, { active: true });
-    return {
-      success: false, clipboardText: urls.join('\n'), urlCount,
-      error: 'Please open a specific notebook in NotebookLM, then try again.',
-    };
-  }
-
-  // Extract notebook ID from URL: /notebook/UUID
-  const nbMatch = nlmUrl.match(/\/notebook\/([a-f0-9-]+)/);
-  const notebookId = nbMatch ? nbMatch[1] : '';
+  // Determine notebook ID: either passed directly or from open NLM tab
+  let notebookId = targetNotebookId || '';
+  let authuser = '';
 
   if (!notebookId) {
-    return { success: false, urlCount, error: 'Cannot extract notebook ID from URL.' };
+    const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
+
+    if (nlmTabs.length === 0 || !nlmTabs[0].id) {
+      await chrome.tabs.create({ url: 'https://notebooklm.google.com/', active: true });
+      return {
+        success: false, clipboardText: urls.join('\n'), urlCount,
+        error: 'Please open a notebook in NotebookLM first, then try again.',
+      };
+    }
+
+    const nlmUrl = nlmTabs[0].url || '';
+    if (!nlmUrl.includes('/notebook/')) {
+      await chrome.tabs.update(nlmTabs[0].id, { active: true });
+      return {
+        success: false, clipboardText: urls.join('\n'), urlCount,
+        error: 'Please open a specific notebook in NotebookLM, then try again.',
+      };
+    }
+
+    const nbMatch = nlmUrl.match(/\/notebook\/([a-f0-9-]+)/);
+    notebookId = nbMatch ? nbMatch[1] : '';
+    const nlmUrlObj = new URL(nlmUrl);
+    authuser = nlmUrlObj.searchParams.get('authuser') || '';
+  }
+
+  if (!notebookId) {
+    return { success: false, urlCount, error: 'Cannot determine notebook ID.' };
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -345,9 +349,7 @@ async function importUrlsToNlm(urls: string[]): Promise<{
   // directly from the service worker. No executeScript needed!
   // ═══════════════════════════════════════════════════════════════
 
-  // Extract authuser from the NLM tab URL
-  const nlmUrlObj = new URL(nlmUrl);
-  const authuser = nlmUrlObj.searchParams.get('authuser') || '';
+  // Get authuser — may have been set from NLM tab URL above, or empty for direct ID calls
   const authuserParam = authuser ? `?authuser=${authuser}&pageId=none` : '';
 
   // Step 1: Fetch NLM homepage to get fresh session tokens (bl, at)
@@ -465,60 +467,57 @@ async function importUrlsToNlm(urls: string[]): Promise<{
  * Create a new notebook in NLM via batchexecute API (CCqFvf RPC).
  * Returns the new notebook ID, or null on failure.
  */
-async function createNlmNotebook(title: string): Promise<string | null> {
-  const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
-  if (!nlmTabs[0]?.id) return null;
+async function createNlmNotebook(title: string, authuser = ''): Promise<string | null> {
+  // Direct fetch from service worker — same pattern as importUrlsToNlm
+  // No executeScript needed!
+  try {
+    const authuserParam = authuser ? `?authuser=${authuser}&pageId=none` : '';
 
-  const [result] = await chrome.scripting.executeScript({
-    target: { tabId: nlmTabs[0].id },
-    world: 'MAIN' as any,
-    func: async (nbTitle: string) => {
-      try {
-        const wizData = (window as any).WIZ_global_data || {};
-        const fSid = wizData.FdrFJe || '';
-        const atToken = wizData.SNlM0e || '';
-        const bl = wizData.cfb2h || '';
-        if (!atToken) return null;
+    // Get fresh session tokens
+    const homepageResp = await fetch(
+      `https://notebooklm.google.com/${authuserParam}`,
+      { redirect: 'error' }
+    );
+    if (!homepageResp.ok) return null;
 
-        const urlParams = new URLSearchParams(window.location.search);
-        let authuser = urlParams.get('authuser') || '0';
-        const match = document.cookie.match(/authuser=(\d+)/);
-        if (match) authuser = match[1];
+    const html = await homepageResp.text();
+    const bl = html.match(/"cfb2h":"([^"]+)"/)?.[1] || '';
+    const atToken = html.match(/"SNlM0e":"([^"]+)"/)?.[1] || '';
+    if (!bl || !atToken) return null;
 
-        // CCqFvf = Create notebook RPC
-        const innerPayload = JSON.stringify([null, nbTitle]);
-        const fReq = JSON.stringify([[['CCqFvf', innerPayload, null, 'generic']]]);
-        const reqId = Math.floor(100000 + Math.random() * 900000);
+    // CCqFvf = Create notebook RPC (same as competitor)
+    const rpcId = 'CCqFvf';
+    const innerPayload = JSON.stringify([title]);
+    const fReq = JSON.stringify([[[rpcId, innerPayload, null, 'generic']]]);
+    const reqId = Math.floor(100000 + Math.random() * 900000);
 
-        const qp = new URLSearchParams({
-          'rpcids': 'CCqFvf', 'source-path': '/',
-          'bl': bl, 'f.sid': fSid, 'hl': document.documentElement.lang || 'en',
-          'authuser': authuser, '_reqid': String(reqId), 'rt': 'c',
-        });
-        const body = new URLSearchParams({ 'f.req': fReq, 'at': atToken });
+    const qp = new URLSearchParams({
+      'rpcids': rpcId, 'source-path': '/', 'bl': bl,
+      '_reqid': String(reqId), 'rt': 'c',
+    });
+    if (authuser) qp.append('authuser', authuser);
 
-        const resp = await fetch(
-          `https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?${qp}`,
-          { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-            credentials: 'include', body: body.toString() }
-        );
+    const body = new URLSearchParams({ 'f.req': fReq, 'at': atToken });
 
-        if (!resp.ok) return null;
+    const resp = await fetch(
+      `https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?${qp.toString()}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() }
+    );
 
-        // Parse response to extract new notebook ID
-        const text = await resp.text();
-        // Response format: )]}\'\n followed by JSON arrays
-        // The notebook ID is a UUID in the response
-        const uuidMatch = text.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/);
-        return uuidMatch ? uuidMatch[1] : null;
-      } catch {
-        return null;
-      }
-    },
-    args: [title],
-  });
+    if (!resp.ok) {
+      console.log(`[VideoLM] createNotebook failed: HTTP ${resp.status}`);
+      return null;
+    }
 
-  return result?.result as string | null;
+    const text = await resp.text();
+    const uuidMatch = text.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/);
+    const nbId = uuidMatch ? uuidMatch[1] : null;
+    console.log(`[VideoLM] Created notebook "${title}" → ${nbId}`);
+    return nbId;
+  } catch (e) {
+    console.log(`[VideoLM] createNotebook error:`, e);
+    return null;
+  }
 }
 
 /**
@@ -572,10 +571,9 @@ async function runAutoSplitImport(
       startedAt: Date.now(),
     });
 
-    // Create new notebook
+    // Create new notebook via direct API (no tab needed)
     const newNbId = await createNlmNotebook(`${pageTitle} - Part ${partNumber}`);
     if (!newNbId) {
-      // Save remaining to queue for manual resume
       const queue = createBatchQueue(remainingUrls.length > 0 ? [...chunk, ...remainingUrls] : chunk, pageTitle);
       await saveQueue(queue);
       await setImportStatus({
@@ -589,24 +587,15 @@ async function runAutoSplitImport(
       return;
     }
 
-    // Navigate NLM tab to the new notebook
-    const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
-    if (nlmTabs[0]?.id) {
-      await chrome.tabs.update(nlmTabs[0].id, {
-        url: `https://notebooklm.google.com/notebook/${newNbId}`,
-      });
-      // Wait for page to load
-      await new Promise(r => setTimeout(r, 3000));
-    }
-
     await setImportStatus({
       active: true, pageTitle, totalUrls: urls.length,
       importedCount: totalImported,
-      phase: `Importing ${chunk.length} to Part ${partNumber}...`,
+      phase: `Importing ${chunk.length} to "${pageTitle} - Part ${partNumber}"...`,
       startedAt: Date.now(),
     });
 
-    const chunkResult = await importUrlsToNlm(chunk);
+    // Import directly to the new notebook by ID (no tab navigation needed!)
+    const chunkResult = await importUrlsToNlm(chunk, newNbId);
     if (chunkResult.success) {
       totalImported += chunk.length;
     }
