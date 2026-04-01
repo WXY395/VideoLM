@@ -1,0 +1,53 @@
+{
+"update_url": "https://clients2.google.com/service/update2/crx",
+
+	"manifest_version": 3,
+	"name": "__MSG_appName__",
+	"short_name": "YouTube to NotebookLM",
+	"description": "__MSG_shortDesc__",
+	"default_locale": "en",
+	"options_page": "/ytlm-app/dist/index.html",
+	"version": "1.0.25",
+	"content_scripts": [
+		{
+			"matches": ["*://*/*"],
+			"js": ["/build/app.js"],
+			"run_at": "document_start",
+			"all_frames": true
+		},
+		{
+			"matches": ["https://*.youtube.com/*"],
+			"css": ["/build/context.css"],
+			"run_at": "document_start",
+			"all_frames": true
+		}
+	],
+	"web_accessible_resources": [
+		{
+			"resources": ["icon/*"],
+			"matches": ["<all_urls>"]
+		}
+	],
+	"icons": {
+		"16": "icon/icon_16.png",
+		"32": "icon/icon_32.png",
+		"48": "icon/icon_48.png",
+		"128": "icon/icon_128.png"
+	},
+	"action": {
+		"default_icon": {
+			"16": "icon/icon_16.png",
+			"32": "icon/icon_32.png",
+			"48": "icon/icon_48.png",
+			"128": "icon/icon_128.png"
+		},
+		"default_popup": "/ytlm-app/dist/index.html",
+		"default_title": "__MSG_appName__"
+	},
+	"permissions": ["tabs", "storage", "contextMenus", "scripting", "unlimitedStorage"],
+	"background": {
+		"service_worker": "/build/background.js"
+	},
+	"host_permissions": ["<all_urls>"],
+	"key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqkAqGgFYU4JJ+Qh13NUEPx61xjWZukMij/5sMJVwWtM1c/pNNPjpUnalhWLx9XlHQmM+kr5ecdRSv63i22nxNnw5b0Qbjt02Q8ytwLCEhDB7Asrj6mP0Xhr7G+SUJ1WTVBx5Eut665rrmPhxlwDFLnFHbuEgV9ABTH6vQAdpqCC+6PUKxHbxv/xeflCs9BQU7HTRcnfWwnIj8NsK9TEkZ1otSLalBOMOYC3+HMB37ZGm9npREMCgxP80Hp4hdLkab/oiI0voFuPhJGYHw256IFGtXQYo4JQgwAKpRIXcqIEMYOvEIeVjXlbGM9Fj4Ub7GwchbRopNYfFjh1cJ26WqwIDAQAB"
+}
