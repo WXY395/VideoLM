@@ -296,7 +296,7 @@ function deduplicateAgainstExisting(urls: string[], existingUrls: string[]): str
  * using session credentials from the NLM page. Zero UI interference,
  * no "已達上限" warnings, ~500ms per source.
  */
-async function importUrlsToNlm(urls: string[], targetNotebookId?: string): Promise<{
+async function importUrlsToNlm(urls: string[], targetNotebookId?: string, targetAuthuser?: string): Promise<{
   success: boolean;
   error?: string;
   urlCount: number;
@@ -311,7 +311,7 @@ async function importUrlsToNlm(urls: string[], targetNotebookId?: string): Promi
 
   // Determine notebook ID: either passed directly or from open NLM tab
   let notebookId = targetNotebookId || '';
-  let authuser = '';
+  let authuser = targetAuthuser || '';
 
   if (!notebookId) {
     const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
@@ -596,7 +596,7 @@ async function runAutoSplitImport(
     });
 
     // Import directly to the new notebook by ID (no tab navigation needed!)
-    const chunkResult = await importUrlsToNlm(chunk, newNbId);
+    const chunkResult = await importUrlsToNlm(chunk, newNbId, authuser);
     if (chunkResult.success) {
       totalImported += chunk.length;
     }
