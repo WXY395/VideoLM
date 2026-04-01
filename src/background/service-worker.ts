@@ -836,7 +836,9 @@ chrome.runtime.onMessage.addListener(
                     selector = 'ytd-playlist-video-renderer a#video-title';
                     break;
                   case 'channel':
-                    selector = 'ytd-rich-item-renderer a#video-title-link, ytd-grid-video-renderer a#video-title';
+                    // Channel pages: /videos, /featured, /streams, homepage
+                    // Multiple renderers depending on the sub-page layout
+                    selector = 'ytd-rich-item-renderer a#video-title-link, ytd-grid-video-renderer a#video-title, ytd-video-renderer a#video-title, ytd-compact-video-renderer a.yt-simple-endpoint';
                     break;
                   case 'search':
                     selector = 'ytd-video-renderer a#video-title';
