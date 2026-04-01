@@ -349,8 +349,9 @@ async function importUrlsToNlm(urls: string[], targetNotebookId?: string, target
   // directly from the service worker. No executeScript needed!
   // ═══════════════════════════════════════════════════════════════
 
-  // Get authuser — may have been set from NLM tab URL above, or empty for direct ID calls
+  // Get authuser — may have been set from NLM tab URL above, or passed as targetAuthuser
   const authuserParam = authuser ? `?authuser=${authuser}&pageId=none` : '';
+  console.log(`[VideoLM] importUrlsToNlm: notebookId=${notebookId}, authuser=${authuser}, urls=${urls.length}`);
 
   // Step 1: Fetch NLM homepage to get fresh session tokens (bl, at)
   let bl = '';
@@ -588,6 +589,11 @@ async function runAutoSplitImport(
       return;
     }
 
+    // Wait for NLM to fully register the new notebook before adding sources
+    // The competitor uses rLM1Ne polling; we use a simpler delay
+    console.log(`[VideoLM] Waiting 3s for notebook ${newNbId} to be ready...`);
+    await new Promise(r => setTimeout(r, 3000));
+
     await setImportStatus({
       active: true, pageTitle, totalUrls: urls.length,
       importedCount: totalImported,
@@ -595,7 +601,7 @@ async function runAutoSplitImport(
       startedAt: Date.now(),
     });
 
-    // Import directly to the new notebook by ID (no tab navigation needed!)
+    // Import directly to the new notebook by ID
     const chunkResult = await importUrlsToNlm(chunk, newNbId, authuser);
     if (chunkResult.success) {
       totalImported += chunk.length;
