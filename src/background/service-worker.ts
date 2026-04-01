@@ -339,107 +339,96 @@ async function importUrlsToNlm(urls: string[]): Promise<{
     return { success: false, urlCount, error: 'Cannot extract notebook ID from URL.' };
   }
 
-  // Execute in MAIN world to access NLM's session data and make API calls
-  const [result] = await chrome.scripting.executeScript({
+  // Step 1: Read session data from NLM page (one quick MAIN world call)
+  const [sessionResult] = await chrome.scripting.executeScript({
     target: { tabId: nlmTabId },
     world: 'MAIN' as any,
-    func: async (videoUrls: string[], nbId: string) => {
-      try {
-        // Extract session parameters from NLM page
-        // f.sid: from WIZ_global_data.FdrFJe or page scripts
-        // at: CSRF token from WIZ_global_data.SNlM0e
-        // bl: build label from WIZ_global_data.cfb2h
-        const wizData = (window as any).WIZ_global_data || {};
-        const fSid = wizData.FdrFJe || '';
-        const atToken = wizData.SNlM0e || '';
-        const bl = wizData.cfb2h || '';
+    func: () => {
+      const wizData = (window as any).WIZ_global_data || {};
+      const urlParams = new URLSearchParams(window.location.search);
+      let authuser = urlParams.get('authuser') || '0';
+      const match = document.cookie.match(/authuser=(\d+)/);
+      if (match) authuser = match[1];
 
-        if (!atToken) {
-          return { success: false, error: 'Cannot read NLM session token. Try refreshing the NotebookLM page.' };
-        }
+      return {
+        fSid: wizData.FdrFJe || '',
+        atToken: wizData.SNlM0e || '',
+        bl: wizData.cfb2h || '',
+        authuser,
+        lang: document.documentElement.lang || 'en',
+      };
+    },
+    args: [],
+  });
 
-        // Get authuser from URL or cookies
-        const urlParams = new URLSearchParams(window.location.search);
-        let authuser = urlParams.get('authuser') || '0';
-        // Also try from the page's cookie
-        if (authuser === '0') {
-          const match = document.cookie.match(/authuser=(\d+)/);
-          if (match) authuser = match[1];
-        }
+  const session = sessionResult?.result as any;
+  if (!session?.atToken) {
+    return { success: false, urlCount, error: 'Cannot read NLM session. Try refreshing NLM page.' };
+  }
 
-        const sourcePath = `/notebook/${nbId}`;
-        const lang = document.documentElement.lang || 'en';
+  // Step 2: Send API calls from MAIN world — each URL as a separate executeScript
+  // This way the loop is in the service worker (robust) and each API call is independent
+  const CONCURRENCY = 5;
+  let successCount = 0;
+  let lastError = '';
+  const validUrls = urls.filter(Boolean);
 
-        // Helper: send one izAoDd request for a single URL
-        async function addSource(videoUrl: string): Promise<boolean> {
+  async function addOneSource(videoUrl: string): Promise<boolean> {
+    try {
+      const [r] = await chrome.scripting.executeScript({
+        target: { tabId: nlmTabId },
+        world: 'MAIN' as any,
+        func: async (url: string, nbId: string, s: any) => {
           const innerPayload = JSON.stringify([
-            [[null, null, null, null, null, null, null, [videoUrl], null, null, 1]],
-            nbId,
-            [2],
-            [1, null, null, null, null, null, null, null, null, [1]],
+            [[null, null, null, null, null, null, null, [url], null, null, 1]],
+            nbId, [2], [1, null, null, null, null, null, null, null, null, [1]],
           ]);
           const fReq = JSON.stringify([[['izAoDd', innerPayload, null, 'generic']]]);
           const reqId = Math.floor(100000 + Math.random() * 900000);
-
           const qp = new URLSearchParams({
-            'rpcids': 'izAoDd', 'source-path': sourcePath, 'bl': bl,
-            'f.sid': fSid, 'hl': lang, 'authuser': authuser,
+            'rpcids': 'izAoDd', 'source-path': `/notebook/${nbId}`, 'bl': s.bl,
+            'f.sid': s.fSid, 'hl': s.lang, 'authuser': s.authuser,
             '_reqid': String(reqId), 'rt': 'c',
           });
-          const body = new URLSearchParams({ 'f.req': fReq, 'at': atToken });
-
+          const body = new URLSearchParams({ 'f.req': fReq, 'at': s.atToken });
           const resp = await fetch(
             `https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?${qp}`,
-            { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }, credentials: 'include', body: body.toString() }
+            { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+              credentials: 'include', body: body.toString() }
           );
           return resp.ok;
-        }
+        },
+        args: [videoUrl, notebookId, session],
+      });
+      return r?.result === true;
+    } catch {
+      return false;
+    }
+  }
 
-        // Send requests in parallel batches of CONCURRENCY
-        // This is ~5x faster than sequential while being respectful to NLM
-        const CONCURRENCY = 5;
-        let successCount = 0;
-        let lastError = '';
-        const validUrls = videoUrls.filter(Boolean);
+  for (let i = 0; i < validUrls.length; i += CONCURRENCY) {
+    const batch = validUrls.slice(i, i + CONCURRENCY);
+    const results = await Promise.allSettled(batch.map(u => addOneSource(u)));
 
-        for (let i = 0; i < validUrls.length; i += CONCURRENCY) {
-          const batch = validUrls.slice(i, i + CONCURRENCY);
-          const results = await Promise.allSettled(batch.map(u => addSource(u)));
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value) successCount++;
+      else if (r.status === 'rejected') lastError = r.reason?.message || String(r.reason);
+      else lastError = 'Request failed';
+    }
 
-          for (const r of results) {
-            if (r.status === 'fulfilled' && r.value) successCount++;
-            else if (r.status === 'rejected') lastError = r.reason?.message || String(r.reason);
-            else lastError = 'Request failed';
-          }
+    try {
+      chrome.action.setBadgeText({ text: `${successCount}/${validUrls.length}` });
+      chrome.action.setBadgeBackgroundColor({ color: '#1a73e8' });
+    } catch { /* badge not available */ }
 
-          // Update badge with progress (visible even when popup is closed)
-          try {
-            chrome.action.setBadgeText({ text: `${successCount}/${validUrls.length}` });
-            chrome.action.setBadgeBackgroundColor({ color: '#1a73e8' });
-          } catch { /* badge API may not be available */ }
+    if (i + CONCURRENCY < validUrls.length) {
+      await new Promise(r => setTimeout(r, 300));
+    }
+  }
 
-          // Brief pause between parallel batches
-          if (i + CONCURRENCY < validUrls.length) {
-            await new Promise(r => setTimeout(r, 300));
-          }
-        }
-
-        if (successCount === 0) {
-          return { success: false, error: lastError || 'All API calls failed.' };
-        }
-
-        return {
-          success: true,
-          successCount,
-          total: videoUrls.length,
-          failCount: videoUrls.length - successCount,
-        };
-      } catch (e: any) {
-        return { success: false, error: e.message || String(e) };
-      }
-    },
-    args: [urls, notebookId],
-  });
+  const result = successCount > 0
+    ? { success: true, successCount, total: validUrls.length, failCount: validUrls.length - successCount }
+    : { success: false, error: lastError || 'All API calls failed.' };
 
   const importResult = result?.result as any;
 
@@ -450,9 +439,9 @@ async function importUrlsToNlm(urls: string[]): Promise<{
     setTimeout(() => chrome.action.setBadgeText({ text: '' }), 8000);
   } catch { /* ignore */ }
 
-  if (importResult?.success) {
+  if (result.success) {
     await incrementUsage('imports');
-    const { successCount, failCount } = importResult;
+    const { successCount, failCount } = result as any;
     let msg = successCount === 1
       ? 'YouTube video added to your NotebookLM notebook!'
       : `Added ${successCount} videos to your NotebookLM notebook!`;
@@ -463,7 +452,7 @@ async function importUrlsToNlm(urls: string[]): Promise<{
   } else {
     return {
       success: false, clipboardText: urls.join('\n'), urlCount,
-      error: importResult?.error || 'API import failed.',
+      error: (result as any).error || 'API import failed.',
     };
   }
 }
