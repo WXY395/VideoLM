@@ -366,30 +366,38 @@ async function importUrlsToNlm(urls: string[]): Promise<{
     return { success: false, urlCount, error: 'Cannot read NLM session. Try refreshing NLM page.' };
   }
 
-  // Step 2: Send API calls from MAIN world — each URL as a separate executeScript
-  // This way the loop is in the service worker (robust) and each API call is independent
-  const CONCURRENCY = 5;
-  let successCount = 0;
-  let lastError = '';
+  // Step 2: Send API calls in batches of CHUNK_SIZE via MAIN world
+  // Each executeScript handles a small batch (fast, ~2-3s) to avoid
+  // being killed by page navigation. The SW loop is stable.
+  const CHUNK_SIZE = 10;
   const validUrls = urls.filter(Boolean);
+  let totalSuccess = 0;
+  let lastError = '';
 
-  async function addOneSource(videoUrl: string, retries = 2): Promise<boolean> {
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      try {
-        const [r] = await chrome.scripting.executeScript({
-          target: { tabId: nlmTabId },
-          world: 'MAIN' as any,
-          func: async (url: string, nbId: string, s: any) => {
-            const innerPayload = JSON.stringify([
+  console.log(`[VideoLM] Starting import of ${validUrls.length} URLs to notebook ${notebookId}`);
+
+  for (let i = 0; i < validUrls.length; i += CHUNK_SIZE) {
+    const chunk = validUrls.slice(i, i + CHUNK_SIZE);
+
+    try {
+      const [r] = await chrome.scripting.executeScript({
+        target: { tabId: nlmTabId },
+        world: 'MAIN' as any,
+        func: async (videoUrls: string[], nbId: string, s: any) => {
+          let ok = 0;
+          let err = '';
+          const PARALLEL = 5;
+
+          async function addOne(url: string): Promise<boolean> {
+            const inner = JSON.stringify([
               [[null, null, null, null, null, null, null, [url], null, null, 1]],
               nbId, [2], [1, null, null, null, null, null, null, null, null, [1]],
             ]);
-            const fReq = JSON.stringify([[['izAoDd', innerPayload, null, 'generic']]]);
-            const reqId = Math.floor(100000 + Math.random() * 900000);
+            const fReq = JSON.stringify([[['izAoDd', inner, null, 'generic']]]);
             const qp = new URLSearchParams({
               'rpcids': 'izAoDd', 'source-path': `/notebook/${nbId}`, 'bl': s.bl,
               'f.sid': s.fSid, 'hl': s.lang, 'authuser': s.authuser,
-              '_reqid': String(reqId), 'rt': 'c',
+              '_reqid': String(Math.floor(100000 + Math.random() * 900000)), 'rt': 'c',
             });
             const body = new URLSearchParams({ 'f.req': fReq, 'at': s.atToken });
             const resp = await fetch(
@@ -398,73 +406,67 @@ async function importUrlsToNlm(urls: string[]): Promise<{
                 credentials: 'include', body: body.toString() }
             );
             return resp.ok;
-          },
-          args: [videoUrl, notebookId, session],
-        });
-        if (r?.result === true) return true;
-      } catch (e) {
-        console.log(`[VideoLM] addSource attempt ${attempt + 1} failed for ${videoUrl}:`, e);
-        if (attempt < retries) {
-          await new Promise(r => setTimeout(r, 1000)); // Wait before retry
-        }
+          }
+
+          // Process in parallel sub-batches of PARALLEL
+          for (let j = 0; j < videoUrls.length; j += PARALLEL) {
+            const batch = videoUrls.slice(j, j + PARALLEL);
+            const results = await Promise.allSettled(batch.map(u => addOne(u)));
+            for (const r of results) {
+              if (r.status === 'fulfilled' && r.value) ok++;
+              else err = r.status === 'rejected' ? String(r.reason) : 'failed';
+            }
+          }
+
+          return { ok, err };
+        },
+        args: [chunk, notebookId, session],
+      });
+
+      const chunkResult = r?.result as any;
+      if (chunkResult) {
+        totalSuccess += chunkResult.ok || 0;
+        if (chunkResult.err) lastError = chunkResult.err;
       }
-    }
-    return false;
-  }
-
-  console.log(`[VideoLM] Starting import of ${validUrls.length} URLs to notebook ${notebookId}`);
-
-  for (let i = 0; i < validUrls.length; i += CONCURRENCY) {
-    const batch = validUrls.slice(i, i + CONCURRENCY);
-    const results = await Promise.allSettled(batch.map(u => addOneSource(u)));
-
-    for (const r of results) {
-      if (r.status === 'fulfilled' && r.value) successCount++;
-      else if (r.status === 'rejected') lastError = r.reason?.message || String(r.reason);
-      else lastError = 'Request failed';
+    } catch (e) {
+      console.log(`[VideoLM] Chunk ${Math.floor(i / CHUNK_SIZE) + 1} failed:`, e);
+      lastError = String(e);
     }
 
-    console.log(`[VideoLM] Progress: ${successCount}/${validUrls.length} (batch ${Math.floor(i / CONCURRENCY) + 1})`);
+    console.log(`[VideoLM] Progress: ${totalSuccess}/${validUrls.length}`);
 
     try {
-      chrome.action.setBadgeText({ text: `${successCount}/${validUrls.length}` });
+      chrome.action.setBadgeText({ text: `${totalSuccess}/${validUrls.length}` });
       chrome.action.setBadgeBackgroundColor({ color: '#1a73e8' });
     } catch { /* badge not available */ }
 
-    if (i + CONCURRENCY < validUrls.length) {
-      await new Promise(r => setTimeout(r, 300));
+    // Brief pause between chunks
+    if (i + CHUNK_SIZE < validUrls.length) {
+      await new Promise(r => setTimeout(r, 500));
     }
   }
 
-  console.log(`[VideoLM] Import complete: ${successCount}/${validUrls.length} succeeded`);
+  console.log(`[VideoLM] Import complete: ${totalSuccess}/${validUrls.length} succeeded`);
 
-  const result = successCount > 0
-    ? { success: true, successCount, total: validUrls.length, failCount: validUrls.length - successCount }
-    : { success: false, error: lastError || 'All API calls failed.' };
-
-  const importResult = result?.result as any;
-
-  // Clear badge on completion (show ✓ briefly)
+  // Clear badge on completion
   try {
     chrome.action.setBadgeText({ text: '✓' });
     chrome.action.setBadgeBackgroundColor({ color: '#34a853' });
     setTimeout(() => chrome.action.setBadgeText({ text: '' }), 8000);
   } catch { /* ignore */ }
 
-  if (result.success) {
+  if (totalSuccess > 0) {
     await incrementUsage('imports');
-    const { successCount, failCount } = result as any;
-    let msg = successCount === 1
+    const failCount = validUrls.length - totalSuccess;
+    let msg = totalSuccess === 1
       ? 'YouTube video added to your NotebookLM notebook!'
-      : `Added ${successCount} videos to your NotebookLM notebook!`;
-    if (failCount > 0) {
-      msg += ` (${failCount} failed)`;
-    }
-    return { success: true, message: msg, urlCount: successCount };
+      : `Added ${totalSuccess} videos to your NotebookLM notebook!`;
+    if (failCount > 0) msg += ` (${failCount} failed)`;
+    return { success: true, message: msg, urlCount: totalSuccess };
   } else {
     return {
       success: false, clipboardText: urls.join('\n'), urlCount,
-      error: (result as any).error || 'API import failed.',
+      error: lastError || 'API import failed.',
     };
   }
 }
