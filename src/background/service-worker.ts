@@ -469,6 +469,192 @@ async function importUrlsToNlm(urls: string[]): Promise<{
 }
 
 // ---------------------------------------------------------------------------
+// NLM Notebook Creation — create new notebooks via API for auto-split
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a new notebook in NLM via batchexecute API (CCqFvf RPC).
+ * Returns the new notebook ID, or null on failure.
+ */
+async function createNlmNotebook(title: string): Promise<string | null> {
+  const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
+  if (!nlmTabs[0]?.id) return null;
+
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId: nlmTabs[0].id },
+    world: 'MAIN' as any,
+    func: async (nbTitle: string) => {
+      try {
+        const wizData = (window as any).WIZ_global_data || {};
+        const fSid = wizData.FdrFJe || '';
+        const atToken = wizData.SNlM0e || '';
+        const bl = wizData.cfb2h || '';
+        if (!atToken) return null;
+
+        const urlParams = new URLSearchParams(window.location.search);
+        let authuser = urlParams.get('authuser') || '0';
+        const match = document.cookie.match(/authuser=(\d+)/);
+        if (match) authuser = match[1];
+
+        // CCqFvf = Create notebook RPC
+        const innerPayload = JSON.stringify([null, nbTitle]);
+        const fReq = JSON.stringify([[['CCqFvf', innerPayload, null, 'generic']]]);
+        const reqId = Math.floor(100000 + Math.random() * 900000);
+
+        const qp = new URLSearchParams({
+          'rpcids': 'CCqFvf', 'source-path': '/',
+          'bl': bl, 'f.sid': fSid, 'hl': document.documentElement.lang || 'en',
+          'authuser': authuser, '_reqid': String(reqId), 'rt': 'c',
+        });
+        const body = new URLSearchParams({ 'f.req': fReq, 'at': atToken });
+
+        const resp = await fetch(
+          `https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?${qp}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+            credentials: 'include', body: body.toString() }
+        );
+
+        if (!resp.ok) return null;
+
+        // Parse response to extract new notebook ID
+        const text = await resp.text();
+        // Response format: )]}\'\n followed by JSON arrays
+        // The notebook ID is a UUID in the response
+        const uuidMatch = text.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/);
+        return uuidMatch ? uuidMatch[1] : null;
+      } catch {
+        return null;
+      }
+    },
+    args: [title],
+  });
+
+  return result?.result as string | null;
+}
+
+/**
+ * Run the full auto-split batch import:
+ * 1. Import first batch to current notebook
+ * 2. For each remaining chunk: auto-create notebook + import
+ * 3. Play completion sound
+ * All runs in background — popup can be closed.
+ */
+async function runAutoSplitImport(
+  urls: string[],
+  pageTitle: string,
+  existingCount: number,
+  limit: number,
+): Promise<void> {
+  const availableSlots = Math.max(0, limit - existingCount);
+  const firstBatch = urls.slice(0, availableSlots);
+  const remaining = urls.slice(availableSlots);
+
+  // Import first batch to current notebook
+  await setImportStatus({
+    active: true, pageTitle, totalUrls: urls.length,
+    importedCount: 0, phase: `Importing ${firstBatch.length} to current notebook...`,
+    startedAt: Date.now(),
+  });
+
+  const firstResult = await importUrlsToNlm(firstBatch);
+  let totalImported = firstResult.success ? firstBatch.length : 0;
+
+  if (!firstResult.success) {
+    await setImportStatus({
+      active: false, pageTitle, totalUrls: urls.length,
+      importedCount: 0, phase: 'Failed', startedAt: Date.now(),
+      lastError: firstResult.error, completed: true,
+    });
+    return;
+  }
+
+  // Process remaining chunks — each gets a new notebook
+  let remainingUrls = remaining;
+  let partNumber = 2;
+
+  while (remainingUrls.length > 0) {
+    const chunk = remainingUrls.slice(0, limit); // New notebook = full limit
+    remainingUrls = remainingUrls.slice(limit);
+
+    await setImportStatus({
+      active: true, pageTitle, totalUrls: urls.length,
+      importedCount: totalImported,
+      phase: `Creating "${pageTitle} - Part ${partNumber}"...`,
+      startedAt: Date.now(),
+    });
+
+    // Create new notebook
+    const newNbId = await createNlmNotebook(`${pageTitle} - Part ${partNumber}`);
+    if (!newNbId) {
+      // Save remaining to queue for manual resume
+      const queue = createBatchQueue(remainingUrls.length > 0 ? [...chunk, ...remainingUrls] : chunk, pageTitle);
+      await saveQueue(queue);
+      await setImportStatus({
+        active: false, pageTitle, totalUrls: urls.length,
+        importedCount: totalImported,
+        phase: 'Notebook creation failed', startedAt: Date.now(),
+        completed: true, needsNewNotebook: true,
+        remainingCount: chunk.length + remainingUrls.length,
+        completionMessage: `Imported ${totalImported} videos. Could not auto-create Part ${partNumber}. ${chunk.length + remainingUrls.length} remaining in queue.`,
+      });
+      return;
+    }
+
+    // Navigate NLM tab to the new notebook
+    const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
+    if (nlmTabs[0]?.id) {
+      await chrome.tabs.update(nlmTabs[0].id, {
+        url: `https://notebooklm.google.com/notebook/${newNbId}`,
+      });
+      // Wait for page to load
+      await new Promise(r => setTimeout(r, 3000));
+    }
+
+    await setImportStatus({
+      active: true, pageTitle, totalUrls: urls.length,
+      importedCount: totalImported,
+      phase: `Importing ${chunk.length} to Part ${partNumber}...`,
+      startedAt: Date.now(),
+    });
+
+    const chunkResult = await importUrlsToNlm(chunk);
+    if (chunkResult.success) {
+      totalImported += chunk.length;
+    }
+
+    partNumber++;
+  }
+
+  // All done! Play completion sound + update status
+  await setImportStatus({
+    active: false, pageTitle, totalUrls: urls.length,
+    importedCount: totalImported, phase: 'Complete', startedAt: Date.now(),
+    completed: true,
+    completionMessage: `All ${totalImported} videos imported across ${partNumber - 1} notebooks!`,
+  });
+
+  // Play completion notification sound
+  try {
+    await chrome.offscreen?.createDocument?.({
+      url: 'about:blank',
+      reasons: ['AUDIO_PLAYBACK' as any],
+      justification: 'Play import completion sound',
+    });
+  } catch { /* offscreen may not be available */ }
+
+  // Use chrome.notifications as fallback
+  try {
+    chrome.notifications.create('videolm-import-done', {
+      type: 'basic',
+      iconUrl: 'icons/icon128.png',
+      title: 'VideoLM Import Complete',
+      message: `All ${totalImported} videos from "${pageTitle}" have been imported!`,
+      silent: false, // This triggers the system notification sound
+    });
+  } catch { /* notifications may not be available */ }
+}
+
+// ---------------------------------------------------------------------------
 // Message router
 // ---------------------------------------------------------------------------
 
@@ -958,84 +1144,32 @@ chrome.runtime.onMessage.addListener(
               return;
             }
 
-            // Step 1: Get notebook capacity + existing URLs for deduplication
+            // Deduplicate against existing notebook sources
             const nbInfo = await getNlmNotebookInfo();
-            const availableSlots = Math.max(0, nbInfo.limit - nbInfo.count);
-
-            // Step 2: Deduplicate — remove URLs already in the notebook
             const uniqueUrls = deduplicateAgainstExisting(rawUrls, nbInfo.existingUrls);
-            const removedDupes = rawUrls.length - uniqueUrls.length;
+            const dupeCount = rawUrls.length - uniqueUrls.length;
 
             if (uniqueUrls.length === 0) {
               sendResponse({
                 success: true,
-                message: removedDupes > 0
-                  ? `All ${rawUrls.length} videos are already in this notebook. Nothing to import.`
+                message: dupeCount > 0
+                  ? `All ${rawUrls.length} videos are already in this notebook.`
                   : 'No new videos to import.',
               });
               return;
             }
 
-            if (availableSlots === 0) {
-              sendResponse({
-                success: false,
-                error: `This notebook is full (${nbInfo.count}/${nbInfo.limit} sources). Please create a new notebook first.`,
-              });
-              return;
-            }
-
-            // Step 3: Split into what fits now vs what needs a new notebook
-            const firstBatchSize = Math.min(uniqueUrls.length, availableSlots);
-            const firstBatch = uniqueUrls.slice(0, firstBatchSize);
-            const remaining = uniqueUrls.slice(firstBatchSize);
-
-            // Step 4: Set import status + import first batch
-            await setImportStatus({
-              active: true,
-              pageTitle,
-              totalUrls: uniqueUrls.length,
-              importedCount: 0,
-              phase: `Importing ${firstBatchSize} videos...`,
-              startedAt: Date.now(),
+            // Respond immediately — import runs in background
+            const dupeMsg = dupeCount > 0 ? ` (${dupeCount} duplicates skipped)` : '';
+            sendResponse({
+              success: true, importing: true,
+              message: `Importing ${uniqueUrls.length} videos in background...${dupeMsg} You can close this popup.`,
             });
 
-            // Respond immediately so popup can show progress
-            sendResponse({ success: true, message: `Importing ${firstBatchSize} videos...`, importing: true });
+            // Run full auto-split import in background
+            // This creates new notebooks automatically when needed
+            await runAutoSplitImport(uniqueUrls, pageTitle, nbInfo.count, nbInfo.limit);
 
-            // Do the actual import (popup may be closed by now, that's OK)
-            const result = await importUrlsToNlm(firstBatch);
-
-            if (!result.success) {
-              await setImportStatus({
-                active: false, pageTitle, totalUrls: uniqueUrls.length,
-                importedCount: 0, phase: 'Failed', startedAt: Date.now(),
-                lastError: result.error, completed: true,
-              });
-              return;
-            }
-
-            const dupeMsg = removedDupes > 0 ? ` (${removedDupes} duplicates skipped)` : '';
-
-            if (remaining.length === 0) {
-              await setImportStatus({
-                active: false, pageTitle, totalUrls: uniqueUrls.length,
-                importedCount: firstBatchSize, phase: 'Done', startedAt: Date.now(),
-                completed: true,
-                completionMessage: `Added ${firstBatchSize} videos!${dupeMsg}`,
-              });
-              return;
-            }
-
-            // Step 5: Save remaining to queue + update status
-            const queue = createBatchQueue(remaining, pageTitle);
-            await saveQueue(queue);
-
-            await setImportStatus({
-              active: false, pageTitle, totalUrls: uniqueUrls.length,
-              importedCount: firstBatchSize, phase: 'Waiting for new notebook', startedAt: Date.now(),
-              completed: true, needsNewNotebook: true, remainingCount: remaining.length,
-              completionMessage: `Added ${firstBatchSize} videos.${dupeMsg} ${remaining.length} remaining — create "${pageTitle} - Part 2" and click Resume.`,
-            });
           } catch (err) {
             sendResponse({ success: false, error: String(err) });
           }
