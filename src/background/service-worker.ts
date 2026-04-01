@@ -610,6 +610,15 @@ async function runAutoSplitImport(
     partNumber++;
   }
 
+  // Refresh NLM tab so user sees the new notebooks + sources immediately
+  try {
+    const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
+    if (nlmTabs[0]?.id) {
+      await chrome.tabs.reload(nlmTabs[0].id);
+      console.log('[VideoLM] Refreshed NLM tab');
+    }
+  } catch { /* tab may have been closed */ }
+
   // All done! Play completion sound + update status
   await setImportStatus({
     active: false, pageTitle, totalUrls: urls.length,
