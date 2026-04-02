@@ -402,17 +402,13 @@ function extractVideoUrlsFromDom(): string[] {
   return urls;
 }
 
-/** Get page title based on current page type */
+/**
+ * Get page title — uses document.title as primary source (same as popup).
+ * This matches the popup's approach: `tab.title.replace(' - YouTube', '')`
+ * and avoids relying on fragile YouTube DOM selectors that break with layout changes.
+ */
 function getPageTitle(): string {
-  const path = location.pathname;
-  if (/^\/@[^/]+/.test(path) || path.startsWith('/channel/')) {
-    // Channel name from DOM, with document.title fallback
-    return getChannelName() || document.title.replace(/ - YouTube$/, '').trim();
-  }
-  const titleEl = document.querySelector(
-    'yt-formatted-string.ytd-playlist-header-renderer, h1 yt-formatted-string',
-  );
-  return titleEl?.textContent?.trim() || document.title.replace(/ - YouTube$/, '').trim();
+  return document.title.replace(/ - YouTube$/, '').trim() || 'YouTube Page';
 }
 
 // ---------------------------------------------------------------------------
