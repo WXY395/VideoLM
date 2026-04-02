@@ -356,7 +356,9 @@ function getVideoTitle(): string {
 function getChannelName(): string {
   const el =
     document.querySelector('ytd-channel-name yt-formatted-string#text') ||
-    document.querySelector('#channel-name yt-formatted-string');
+    document.querySelector('#channel-name yt-formatted-string') ||
+    document.querySelector('yt-page-header-renderer yt-dynamic-text-view-model span') ||
+    document.querySelector('#channel-header #channel-name');
   return el?.textContent?.trim() || '';
 }
 
@@ -404,7 +406,8 @@ function extractVideoUrlsFromDom(): string[] {
 function getPageTitle(): string {
   const path = location.pathname;
   if (/^\/@[^/]+/.test(path) || path.startsWith('/channel/')) {
-    return getChannelName();
+    // Channel name from DOM, with document.title fallback
+    return getChannelName() || document.title.replace(/ - YouTube$/, '').trim();
   }
   const titleEl = document.querySelector(
     'yt-formatted-string.ytd-playlist-header-renderer, h1 yt-formatted-string',
