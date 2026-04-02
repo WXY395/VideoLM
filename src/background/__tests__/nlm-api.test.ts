@@ -36,14 +36,26 @@ describe('findMatchingNotebooks', () => {
     expect(matches.length).toBe(2); // matches both main and Part 2
   });
 
-  it('does NOT match short names (< 5 chars) to prevent false positives', () => {
+  it('does NOT match short Latin names (< 5 chars) to prevent false positives', () => {
     const matches = findMatchingNotebooks(notebooks, 'AI-powered Marketing');
-    expect(matches.length).toBe(0); // "AI" is too short to match
+    expect(matches.length).toBe(0); // "AI" is too short for Latin match
   });
 
-  it('does NOT match when title is too short', () => {
+  it('does NOT match when Latin title is too short', () => {
     const matches = findMatchingNotebooks(notebooks, 'AI');
     expect(matches.length).toBe(0);
+  });
+
+  it('DOES match short CJK names (≥ 2 chars) — CJK chars carry more meaning', () => {
+    const cjkNotebooks = [makeNotebook('小船', 17)];
+    const matches = findMatchingNotebooks(cjkNotebooks, '小船');
+    expect(matches.length).toBe(1);
+    expect(matches[0].name).toBe('小船');
+  });
+
+  it('does NOT match single CJK char (< 2 chars)', () => {
+    const matches = findMatchingNotebooks(notebooks, '短');
+    expect(matches.length).toBe(0); // "短" is only 1 char
   });
 
   it('returns empty for empty title', () => {

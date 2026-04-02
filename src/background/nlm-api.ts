@@ -217,13 +217,19 @@ export function findMatchingNotebooks(
   const normalizedTitle = normalizeName(pageTitle);
   if (!normalizedTitle) return [];
 
-  const MIN_MATCH_LENGTH = 5; // Prevent false matches on short names like "AI"
+  // CJK characters carry more meaning per char than Latin — use lower threshold
+  // "小船" (2 CJK chars) is a unique channel name, but "AI" (2 Latin chars) could match anything
+  const hasCJK = (s: string) => /[\u4e00-\u9fff\u3400-\u4dbf\uF900-\uFAFF]/.test(s);
+  const MIN_MATCH_LATIN = 5;
+  const MIN_MATCH_CJK = 2;
 
   return notebooks
     .filter((nb) => {
       const normalizedNb = normalizeName(nb.name);
-      if (!normalizedNb || normalizedNb.length < MIN_MATCH_LENGTH) return false;
-      if (normalizedTitle.length < MIN_MATCH_LENGTH) return false;
+      if (!normalizedNb) return false;
+      const minLen = (hasCJK(normalizedNb) || hasCJK(normalizedTitle)) ? MIN_MATCH_CJK : MIN_MATCH_LATIN;
+      if (normalizedNb.length < minLen) return false;
+      if (normalizedTitle.length < minLen) return false;
       return normalizedNb.startsWith(normalizedTitle) || normalizedTitle.startsWith(normalizedNb);
     })
     // Prefer the notebook with most sources (main notebook before Part N)

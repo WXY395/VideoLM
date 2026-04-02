@@ -34,6 +34,31 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 // ---------------------------------------------------------------------------
+// Extension context health check
+// ---------------------------------------------------------------------------
+/** Returns true if extension context is alive (chrome.runtime not invalidated) */
+function isExtensionAlive(): boolean {
+  try {
+    return !!chrome.runtime?.id;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Safe sendMessage — checks extension context first.
+ * If dead, reloads the page to get a fresh content script.
+ */
+function safeSendMessage(message: any, callback?: (response: any) => void): void {
+  if (!isExtensionAlive()) {
+    // Extension was reloaded — need a page refresh for fresh content script
+    location.reload();
+    return;
+  }
+  chrome.runtime.sendMessage(message, callback);
+}
+
+// ---------------------------------------------------------------------------
 // Button styling — matches YouTube's native pill buttons
 // ---------------------------------------------------------------------------
 function createNlmButton(id: string, label: string): HTMLButtonElement {
@@ -118,7 +143,7 @@ function injectVideoButton(): void {
     const originalLabel = labelEl.textContent;
     labelEl.textContent = 'Importing...';
 
-    chrome.runtime.sendMessage(
+    safeSendMessage(
       {
         type: 'QUICK_IMPORT',
         videoUrl: location.href,
@@ -173,33 +198,32 @@ function injectChannelButton(): void {
     const labelEl = btn.querySelector('span:last-child') as HTMLSpanElement;
     labelEl.textContent = 'Extracting...';
 
-    // Send EXTRACT_VIDEO_URLS first, then BATCH_IMPORT
-    chrome.runtime.sendMessage({ type: 'EXTRACT_VIDEO_URLS' }, (response) => {
-      if (response?.urls?.length > 0) {
-        labelEl.textContent = `Importing ${response.urls.length}...`;
-        chrome.runtime.sendMessage(
-          {
-            type: 'BATCH_IMPORT',
-            urls: response.urls,
-            pageTitle: response.pageTitle || getChannelName(),
-          },
-          () => {
-            setTimeout(() => {
-              btn.style.backgroundColor = 'var(--yt-spec-badge-chip-background, #f2f2f2)';
-              btn.style.color = 'var(--yt-spec-text-primary, #0f0f0f)';
-              labelEl.textContent = 'NotebookLM';
-            }, 3000);
-          },
-        );
-      } else {
-        labelEl.textContent = 'No videos found';
-        setTimeout(() => {
-          btn.style.backgroundColor = 'var(--yt-spec-badge-chip-background, #f2f2f2)';
-          btn.style.color = 'var(--yt-spec-text-primary, #0f0f0f)';
-          labelEl.textContent = 'NotebookLM';
-        }, 2000);
-      }
-    });
+    // Extract URLs directly from DOM — no round-trip needed
+    const urls = extractVideoUrlsFromDom();
+    if (urls.length > 0) {
+      labelEl.textContent = `Importing ${urls.length}...`;
+      safeSendMessage(
+        {
+          type: 'BATCH_IMPORT',
+          urls,
+          pageTitle: getPageTitle(),
+        },
+        () => {
+          setTimeout(() => {
+            btn.style.backgroundColor = 'var(--yt-spec-badge-chip-background, #f2f2f2)';
+            btn.style.color = 'var(--yt-spec-text-primary, #0f0f0f)';
+            labelEl.textContent = 'NotebookLM';
+          }, 3000);
+        },
+      );
+    } else {
+      labelEl.textContent = 'No videos found';
+      setTimeout(() => {
+        btn.style.backgroundColor = 'var(--yt-spec-badge-chip-background, #f2f2f2)';
+        btn.style.color = 'var(--yt-spec-text-primary, #0f0f0f)';
+        labelEl.textContent = 'NotebookLM';
+      }, 2000);
+    }
   });
 
   // Append to the actions container
@@ -230,34 +254,31 @@ function injectPlaylistButton(): void {
     btn.style.backgroundColor = '#00838F';
     btn.style.color = '#fff';
     const labelEl = btn.querySelector('span:last-child') as HTMLSpanElement;
-    labelEl.textContent = 'Extracting...';
-
-    chrome.runtime.sendMessage({ type: 'EXTRACT_VIDEO_URLS' }, (response) => {
-      if (response?.urls?.length > 0) {
-        labelEl.textContent = `Importing ${response.urls.length}...`;
-        chrome.runtime.sendMessage(
-          {
-            type: 'BATCH_IMPORT',
-            urls: response.urls,
-            pageTitle: response.pageTitle || 'Playlist',
-          },
-          () => {
-            setTimeout(() => {
-              btn.style.backgroundColor = 'var(--yt-spec-badge-chip-background, #f2f2f2)';
-              btn.style.color = 'var(--yt-spec-text-primary, #0f0f0f)';
-              labelEl.textContent = 'NotebookLM';
-            }, 3000);
-          },
-        );
-      } else {
-        labelEl.textContent = 'No videos found';
-        setTimeout(() => {
-          btn.style.backgroundColor = 'var(--yt-spec-badge-chip-background, #f2f2f2)';
-          btn.style.color = 'var(--yt-spec-text-primary, #0f0f0f)';
-          labelEl.textContent = 'NotebookLM';
-        }, 2000);
-      }
-    });
+    const urls = extractVideoUrlsFromDom();
+    if (urls.length > 0) {
+      labelEl.textContent = `Importing ${urls.length}...`;
+      safeSendMessage(
+        {
+          type: 'BATCH_IMPORT',
+          urls,
+          pageTitle: getPageTitle(),
+        },
+        () => {
+          setTimeout(() => {
+            btn.style.backgroundColor = 'var(--yt-spec-badge-chip-background, #f2f2f2)';
+            btn.style.color = 'var(--yt-spec-text-primary, #0f0f0f)';
+            labelEl.textContent = 'NotebookLM';
+          }, 3000);
+        },
+      );
+    } else {
+      labelEl.textContent = 'No videos found';
+      setTimeout(() => {
+        btn.style.backgroundColor = 'var(--yt-spec-badge-chip-background, #f2f2f2)';
+        btn.style.color = 'var(--yt-spec-text-primary, #0f0f0f)';
+        labelEl.textContent = 'NotebookLM';
+      }, 2000);
+    }
   });
 
   headerActions.appendChild(btn);
@@ -279,6 +300,58 @@ function getChannelName(): string {
     document.querySelector('ytd-channel-name yt-formatted-string#text') ||
     document.querySelector('#channel-name yt-formatted-string');
   return el?.textContent?.trim() || '';
+}
+
+/**
+ * Extract video URLs directly from the current page's DOM.
+ * Content script can access the page DOM directly — no need for
+ * chrome.scripting.executeScript round-trip.
+ */
+function extractVideoUrlsFromDom(): string[] {
+  const path = location.pathname;
+  let selector = '';
+
+  if (/^\/@[^/]+/.test(path) || path.startsWith('/channel/')) {
+    // Channel page
+    selector = 'ytd-rich-item-renderer a#video-title-link, ytd-grid-video-renderer a#video-title, ytd-video-renderer a#video-title, ytd-compact-video-renderer a.yt-simple-endpoint';
+  } else if (path.startsWith('/playlist')) {
+    selector = 'ytd-playlist-video-renderer a#video-title';
+  } else if (path.startsWith('/results')) {
+    selector = 'ytd-video-renderer a#video-title';
+  } else {
+    return [location.href]; // Single video page
+  }
+
+  const links = document.querySelectorAll<HTMLAnchorElement>(selector);
+  const seen = new Set<string>();
+  const urls: string[] = [];
+
+  links.forEach((a) => {
+    if (!a.href) return;
+    // Normalize: strip tracking params, keep only watch?v=ID
+    try {
+      const u = new URL(a.href);
+      const videoId = u.searchParams.get('v');
+      if (videoId && !seen.has(videoId)) {
+        seen.add(videoId);
+        urls.push(`https://www.youtube.com/watch?v=${videoId}`);
+      }
+    } catch { /* skip invalid URLs */ }
+  });
+
+  return urls;
+}
+
+/** Get page title based on current page type */
+function getPageTitle(): string {
+  const path = location.pathname;
+  if (/^\/@[^/]+/.test(path) || path.startsWith('/channel/')) {
+    return getChannelName();
+  }
+  const titleEl = document.querySelector(
+    'yt-formatted-string.ytd-playlist-header-renderer, h1 yt-formatted-string',
+  );
+  return titleEl?.textContent?.trim() || document.title.replace(/ - YouTube$/, '').trim();
 }
 
 // ---------------------------------------------------------------------------
