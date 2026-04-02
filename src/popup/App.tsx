@@ -8,6 +8,7 @@ import { ImportButton } from './components/ImportButton';
 import { BatchInfo } from './components/BatchInfo';
 import { ProgressBar, type ProgressStatus } from './components/ProgressBar';
 import { DuplicateWarning, type DuplicateAction } from './components/DuplicateWarning';
+import { NotebookChoice } from './components/NotebookChoice';
 import { SettingsPage } from './components/SettingsPage';
 import './styles.css';
 
@@ -30,6 +31,12 @@ export function App() {
   const [result, setResult] = useState<ImportResult | null>(null);
   const [duplicateTitle, setDuplicateTitle] = useState<string | null>(null);
   const [pendingQueue, setPendingQueue] = useState<{ remaining: number; pageTitle: string } | null>(null);
+  const [notebookChoice, setNotebookChoice] = useState<{
+    notebook: { id: string; name: string; sourceCount: number; emoji: string };
+    urls: string[];
+    pageTitle: string;
+    authuser: string;
+  } | null>(null);
 
   const isBatchPage = pageType === 'playlist' || pageType === 'channel' || pageType === 'search';
   const hasAI = Boolean(settings?.tier === 'pro' || settings?.byok);
@@ -74,6 +81,14 @@ export function App() {
       }
     });
 
+    // Check for pending notebook choice (ask-mode dedup)
+    chrome.runtime.sendMessage({ type: 'GET_NOTEBOOK_CHOICE' }, (response) => {
+      if (response?.existingNotebook) {
+        setNotebookChoice(response);
+        setImporting(false); // Stop "importing" state — show choice instead
+      }
+    });
+
     // Also check pending queue
     chrome.runtime.sendMessage({ type: 'CHECK_PENDING_QUEUE' }, (response) => {
       if (response?.hasPending && response.remainingUrls > 0) {
@@ -100,13 +115,25 @@ export function App() {
         pageTitle,
       },
       (response) => {
+        // Handle ask-mode: background found a matching notebook
+        if (response?.needsUserChoice && response.existingNotebook) {
+          setNotebookChoice({
+            notebook: response.existingNotebook,
+            urls: response.urls,
+            pageTitle: response.pageTitle,
+            authuser: response.authuser || '',
+          });
+          setImporting(false);
+          setProgress(null);
+          return;
+        }
         // The background responds immediately, then continues importing
         if (response?.importing) {
           // Import started in background — show badge progress
           setResult({
             success: true,
             tier: 1,
-            message: `Importing ${urls.length} videos in background... Check the extension badge for progress. You can close this popup.`,
+            message: response.message || `Importing ${urls.length} videos in background... You can close this popup.`,
           });
           setImporting(false);
         } else if (response?.success) {
@@ -156,6 +183,41 @@ export function App() {
       }
     });
   }, []);
+
+  const handleMergeChoice = useCallback(() => {
+    if (!notebookChoice) return;
+    setNotebookChoice(null);
+    setImporting(true);
+    setResult(null);
+    chrome.runtime.sendMessage({ type: 'CLEAR_NOTEBOOK_CHOICE' });
+    chrome.runtime.sendMessage(
+      {
+        type: 'BATCH_IMPORT_WITH_TARGET',
+        urls: notebookChoice.urls,
+        pageTitle: notebookChoice.pageTitle,
+        targetNotebookId: notebookChoice.notebook.id,
+        authuser: notebookChoice.authuser,
+        existingSourceCount: notebookChoice.notebook.sourceCount,
+      },
+      (response) => {
+        if (response?.importing) {
+          setResult({ success: true, tier: 1, message: 'Merging in background... Check badge for progress.' });
+          setImporting(false);
+        } else {
+          setImporting(false);
+          setResult({ success: response?.success, tier: 1, message: response?.message, error: response?.error });
+        }
+      }
+    );
+  }, [notebookChoice]);
+
+  const handleCreateNewChoice = useCallback(() => {
+    if (!notebookChoice) return;
+    chrome.runtime.sendMessage({ type: 'CLEAR_NOTEBOOK_CHOICE' });
+    const { urls } = notebookChoice;
+    setNotebookChoice(null);
+    handleBatchImport(urls);
+  }, [notebookChoice, handleBatchImport]);
 
   const handleImport = useCallback(() => {
     if (!content) return;
@@ -400,6 +462,16 @@ export function App() {
             <DuplicateWarning
               existingTitle={duplicateTitle}
               onAction={handleDuplicateAction}
+            />
+          )}
+
+          {notebookChoice && !importing && (
+            <NotebookChoice
+              notebook={notebookChoice.notebook}
+              pageTitle={notebookChoice.pageTitle}
+              videoCount={notebookChoice.urls.length}
+              onMerge={handleMergeChoice}
+              onCreateNew={handleCreateNewChoice}
             />
           )}
 

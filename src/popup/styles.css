@@ -572,3 +572,25 @@ body {
 .batch-resume__button--dismiss:hover {
   background: #f1f3f4;
 }
+
+/* NotebookChoice — duplicate notebook merge prompt */
+.notebook-choice { background: #f0f4ff; border-radius: 8px; padding: 12px; margin: 8px 0; }
+.notebook-choice__title { font-weight: 600; font-size: 13px; margin-bottom: 8px; color: #1a73e8; }
+.notebook-choice__notebook { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.notebook-choice__emoji { font-size: 24px; }
+.notebook-choice__name { font-weight: 500; font-size: 13px; }
+.notebook-choice__meta { font-size: 11px; color: #666; }
+.notebook-choice__actions { display: flex; gap: 8px; }
+.notebook-choice__btn { flex: 1; padding: 8px; border: none; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; }
+.notebook-choice__btn--merge { background: #1a73e8; color: white; }
+.notebook-choice__btn--merge:hover { background: #1557b0; }
+.notebook-choice__btn--create { background: #e8eaed; color: #333; }
+.notebook-choice__btn--create:hover { background: #d2d5d9; }
+.notebook-choice__hint { font-size: 11px; color: #888; margin-top: 6px; }
+
+/* Settings radio group */
+.settings-radio-group { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.settings-radio { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
+.settings-radio input[type="radio"] { margin: 0; }
+.settings-radio--disabled { opacity: 0.5; cursor: not-allowed; }
+.settings-pro-badge { background: #1a73e8; color: white; font-size: 9px; padding: 1px 4px; border-radius: 3px; margin-left: 4px; font-weight: 600; }

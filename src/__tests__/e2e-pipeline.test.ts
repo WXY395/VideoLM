@@ -134,6 +134,7 @@ describe('E2E Pipeline: YouTube → Processing → NLM Import', () => {
       const settings: UserSettings = {
         tier: 'free',
         defaultMode: 'raw',
+        duplicateStrategy: 'ask',
         monthlyUsage: { imports: 0, aiCalls: 0, resetDate: '2026-05-01' },
       };
       const provider = resolveProvider(settings);
@@ -145,6 +146,7 @@ describe('E2E Pipeline: YouTube → Processing → NLM Import', () => {
         tier: 'free',
         byok: { provider: 'openai', apiKey: 'sk-test-key', model: 'gpt-4o-mini' },
         defaultMode: 'structured',
+        duplicateStrategy: 'ask',
         monthlyUsage: { imports: 0, aiCalls: 0, resetDate: '2026-05-01' },
       };
       const provider = resolveProvider(settings);

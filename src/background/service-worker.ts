@@ -15,6 +15,8 @@ import {
   MAX_BATCH_SIZE,
 } from './batch-queue';
 import { setImportStatus, getImportStatus, clearImportStatus } from './import-status';
+import { showToast, setToastTab } from './toast';
+import { listNlmNotebooks, findMatchingNotebooks, clearNotebookCache, type NlmNotebook } from './nlm-api';
 
 // ---------------------------------------------------------------------------
 // Pre-load config on service worker startup
@@ -76,7 +78,7 @@ async function getSourceListFromNlmTab(): Promise<Array<{ title: string; url?: s
 async function processAndImport(
   videoContent: VideoContent,
   options: ImportOptions,
-): Promise<{ success: boolean; items: Array<{ title: string; content: string }>; error?: string }> {
+): Promise<{ success: boolean; items: Array<{ title: string; content: string }>; error?: string; clipboardText?: string; message?: string }> {
   // 1. Check quota
   const settings = await getSettings();
   const quota = checkQuota(settings);
@@ -196,7 +198,11 @@ async function getNlmNotebookInfo(): Promise<{
 }> {
   try {
     const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
-    if (!nlmTabs[0]?.id) return { count: 0, limit: 50, existingUrls: [] };
+    // Only read capacity from a specific notebook page, NOT the homepage.
+    // The homepage shows other notebooks' "X 個來源" which gives wrong counts.
+    if (!nlmTabs[0]?.id || !nlmTabs[0]?.url?.includes('/notebook/')) {
+      return { count: 0, limit: 50, existingUrls: [] };
+    }
 
     const [result] = await chrome.scripting.executeScript({
       target: { tabId: nlmTabs[0].id },
@@ -286,6 +292,60 @@ function deduplicateAgainstExisting(urls: string[], existingUrls: string[]): str
   });
 }
 
+/** Filter out URLs whose video IDs already exist in any of the matched notebooks */
+function deduplicateAgainstNotebooks(urls: string[], notebooks: NlmNotebook[]): { uniqueUrls: string[]; skippedCount: number } {
+  const existingIds = new Set<string>();
+  for (const nb of notebooks) {
+    for (const vid of nb.sourceVideoIds) {
+      existingIds.add(vid);
+    }
+  }
+  if (existingIds.size === 0) return { uniqueUrls: urls, skippedCount: 0 };
+
+  const uniqueUrls = urls.filter(url => {
+    const match = url.match(/[?&]v=([\w-]{11})/);
+    return match ? !existingIds.has(match[1]) : true;
+  });
+  const skippedCount = urls.length - uniqueUrls.length;
+  if (skippedCount > 0) {
+    console.log(`[VideoLM] Source-level dedup: ${skippedCount} URLs already exist in matched notebooks (${existingIds.size} known video IDs)`);
+  }
+  return { uniqueUrls, skippedCount };
+}
+
+/** Check which YouTube URLs are valid (not deleted/private) via oEmbed API */
+async function filterValidYouTubeUrls(urls: string[]): Promise<{ valid: string[]; invalid: string[] }> {
+  const valid: string[] = [];
+  const invalid: string[] = [];
+
+  // Batch check in parallel (max 10 concurrent)
+  const CONCURRENCY = 10;
+  for (let i = 0; i < urls.length; i += CONCURRENCY) {
+    const batch = urls.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(
+      batch.map(async (url) => {
+        try {
+          const resp = await fetch(
+            `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`,
+          );
+          return { url, ok: resp.ok };
+        } catch {
+          return { url, ok: false };
+        }
+      }),
+    );
+    for (const r of results) {
+      if (r.ok) valid.push(r.url);
+      else invalid.push(r.url);
+    }
+  }
+
+  if (invalid.length > 0) {
+    console.log(`[VideoLM] URL validation: ${invalid.length} invalid videos filtered out (deleted/private)`);
+  }
+  return { valid, invalid };
+}
+
 /**
  * Import YouTube URLs into the currently-open NLM notebook.
  *
@@ -302,6 +362,8 @@ async function importUrlsToNlm(urls: string[], targetNotebookId?: string, target
   urlCount: number;
   message?: string;
   clipboardText?: string;
+  notebookId?: string;
+  authuser?: string;
 }> {
   const urlCount = urls.length;
 
@@ -449,17 +511,17 @@ async function importUrlsToNlm(urls: string[], targetNotebookId?: string, target
   } catch { /* ignore */ }
 
   if (totalSuccess > 0) {
-    await incrementUsage('imports');
+    await incrementUsage('imports', totalSuccess);
     const failCount = validUrls.length - totalSuccess;
     let msg = totalSuccess === 1
       ? 'YouTube video added to your NotebookLM notebook!'
       : `Added ${totalSuccess} videos to your NotebookLM notebook!`;
     if (failCount > 0) msg += ` (${failCount} failed)`;
-    return { success: true, message: msg, urlCount: totalSuccess };
+    return { success: true, message: msg, urlCount: totalSuccess, notebookId, authuser };
   } else {
     return {
       success: false, clipboardText: urls.join('\n'), urlCount,
-      error: lastError || 'API import failed.',
+      error: lastError || 'API import failed.', notebookId, authuser,
     };
   }
 }
@@ -526,6 +588,79 @@ async function createNlmNotebook(title: string, authuser = ''): Promise<string |
 }
 
 /**
+ * Post-import: refresh NLM tab (or open notebook) + show notification.
+ * Shared by both QUICK_IMPORT and BATCH_IMPORT paths.
+ */
+async function postImportActions(
+  notebookId: string,
+  authuser: string,
+  totalImported: number,
+  pageTitle: string,
+): Promise<void> {
+  // Refresh or open NLM tab so user sees the new sources
+  try {
+    const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
+    if (nlmTabs[0]?.id) {
+      // NLM tab exists — navigate it to the notebook (or reload if already there)
+      const currentUrl = nlmTabs[0].url || '';
+      if (currentUrl.includes(`/notebook/${notebookId}`)) {
+        await chrome.tabs.reload(nlmTabs[0].id);
+      } else {
+        const qs = authuser ? `?authuser=${authuser}` : '';
+        await chrome.tabs.update(nlmTabs[0].id, {
+          url: `https://notebooklm.google.com/notebook/${notebookId}${qs}`,
+        });
+      }
+      console.log('[VideoLM] Refreshed/navigated NLM tab');
+    } else if (notebookId) {
+      // No NLM tab open (auto-create case) — open a new tab
+      const qs = authuser ? `?authuser=${authuser}` : '';
+      await chrome.tabs.create({
+        url: `https://notebooklm.google.com/notebook/${notebookId}${qs}`,
+      });
+      console.log('[VideoLM] Opened new NLM tab for notebook');
+    }
+  } catch { /* tab may have been closed */ }
+
+  // Show floating toast on YouTube tab (primary feedback — always visible)
+  const nbUrl = notebookId
+    ? `https://notebooklm.google.com/notebook/${notebookId}${authuser ? `?authuser=${authuser}` : ''}`
+    : '';
+  await showToast({
+    state: 'success',
+    text: totalImported === 1
+      ? `"${pageTitle}" 已匯入！`
+      : `已匯入 ${totalImported} 個影片 — "${pageTitle}"`,
+    subtext: totalImported === 1
+      ? `"${pageTitle}" imported!`
+      : `${totalImported} videos from "${pageTitle}" imported!`,
+    viewUrl: nbUrl,
+    dismissAfter: 8000,
+  });
+
+  // Also show system notification as backup (may be blocked by OS)
+  try {
+    // Use 48px icon — MV3 service workers sometimes fail to load larger icons
+    chrome.notifications.create('videolm-import-done', {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon48.png'),
+      title: 'VideoLM Import Complete',
+      message: totalImported === 1
+        ? `"${pageTitle}" imported!`
+        : `${totalImported} videos from "${pageTitle}" imported!`,
+      silent: false,
+    }, () => {
+      // Suppress "Unable to download images" error in callback
+      if (chrome.runtime.lastError) {
+        console.log('[VideoLM] Notification warning:', chrome.runtime.lastError.message);
+      }
+    });
+  } catch (e) {
+    console.log('[VideoLM] Notification error:', e);
+  }
+}
+
+/**
  * Run the full auto-split batch import:
  * 1. Import first batch to current notebook
  * 2. For each remaining chunk: auto-create notebook + import
@@ -538,47 +673,140 @@ async function runAutoSplitImport(
   existingCount: number,
   limit: number,
   authuser = '',
+  targetNotebookId = '',
 ): Promise<void> {
   const availableSlots = Math.max(0, limit - existingCount);
   const firstBatch = urls.slice(0, availableSlots);
   const remaining = urls.slice(availableSlots);
 
-  // Import first batch to current notebook
-  await setImportStatus({
-    active: true, pageTitle, totalUrls: urls.length,
-    importedCount: 0, phase: `Importing ${firstBatch.length} to current notebook...`,
-    startedAt: Date.now(),
-  });
+  console.log(`[VideoLM] runAutoSplitImport: total=${urls.length}, existingCount=${existingCount}, limit=${limit}, availableSlots=${availableSlots}, firstBatch=${firstBatch.length}, remaining=${remaining.length}, targetNb=${targetNotebookId}`);
 
-  const firstResult = await importUrlsToNlm(firstBatch, undefined, undefined, pageTitle);
-  let totalImported = firstResult.success ? firstBatch.length : 0;
+  let totalImported = 0;
+  let lastImportedNbId = targetNotebookId || '';
+  let firstResultNbId = '';
+  let firstResultAuthuser = authuser;
 
-  if (!firstResult.success) {
+  // Import first batch to current notebook (skip if already full)
+  if (firstBatch.length > 0) {
     await setImportStatus({
-      active: false, pageTitle, totalUrls: urls.length,
-      importedCount: 0, phase: 'Failed', startedAt: Date.now(),
-      lastError: firstResult.error, completed: true,
+      active: true, pageTitle, totalUrls: urls.length,
+      importedCount: 0, phase: `Importing ${firstBatch.length} to current notebook...`,
+      startedAt: Date.now(),
     });
-    return;
+    await showToast({
+      state: 'importing',
+      text: `正在匯入 ${firstBatch.length} 個影片...`,
+      subtext: `Importing ${firstBatch.length} videos from "${pageTitle}"...`,
+      progress: 0,
+    });
+
+    const firstResult = await importUrlsToNlm(
+      firstBatch,
+      targetNotebookId || undefined,
+      targetNotebookId ? authuser : undefined,
+      targetNotebookId ? undefined : pageTitle,  // Only auto-create if no target
+    );
+    totalImported = firstResult.success ? firstBatch.length : 0;
+    firstResultNbId = firstResult.notebookId || '';
+    firstResultAuthuser = firstResult.authuser || authuser;
+
+    if (!firstResult.success) {
+      await setImportStatus({
+        active: false, pageTitle, totalUrls: urls.length,
+        importedCount: 0, phase: 'Failed', startedAt: Date.now(),
+        lastError: firstResult.error, completed: true,
+      });
+      await showToast({
+        state: 'error',
+        text: `匯入失敗：${firstResult.error || '未知錯誤'}`,
+        subtext: `Import failed: ${firstResult.error || 'Unknown error'}`,
+      });
+      return;
+    }
+    lastImportedNbId = firstResultNbId || lastImportedNbId;
+  } else {
+    console.log(`[VideoLM] Target notebook already full (${existingCount}/${limit}), skipping to overflow`);
   }
 
-  // Process remaining chunks — each gets a new notebook
+  // Process remaining chunks — each gets a new or existing Part notebook
   let remainingUrls = remaining;
   let partNumber = 2;
 
-  while (remainingUrls.length > 0) {
-    const chunk = remainingUrls.slice(0, limit); // New notebook = full limit
+  const MAX_PARTS = 20; // Safety bound to prevent infinite loop
+  while (remainingUrls.length > 0 && partNumber <= MAX_PARTS) {
+    // Checkpoint: persist remaining URLs for crash recovery
+    const checkpoint = createBatchQueue(remainingUrls, pageTitle);
+    await saveQueue(checkpoint);
+
+    const pct = Math.round((totalImported / urls.length) * 100);
+    const partTitle = `${pageTitle} - Part ${partNumber}`;
+
+    // Check if a "Part N" notebook already exists — reuse it instead of creating duplicate
+    let targetNbId = '';
+    let partExistingCount = 0;
+    clearNotebookCache();  // Force fresh lookup after previous import/creation
+    const allNotebooks = await listNlmNotebooks(authuser);
+    const existingPart = allNotebooks.find(
+      (nb) => nb.name.trim().toLowerCase() === partTitle.trim().toLowerCase(),
+    );
+
+    if (existingPart) {
+      targetNbId = existingPart.id;
+      partExistingCount = existingPart.sourceCount;
+      const partAvailable = Math.max(0, limit - partExistingCount);
+      console.log(`[VideoLM] Found existing "${partTitle}" (${partExistingCount} sources, ${partAvailable} slots)`);
+
+      if (partAvailable === 0) {
+        // This Part is full — skip to next part number
+        partNumber++;
+        continue;
+      }
+
+      // Only take what fits in the existing Part
+      const chunk = remainingUrls.slice(0, partAvailable);
+      remainingUrls = remainingUrls.slice(partAvailable);
+
+      await setImportStatus({
+        active: true, pageTitle, totalUrls: urls.length,
+        importedCount: totalImported,
+        phase: `Merging ${chunk.length} into "${partTitle}"...`,
+        startedAt: Date.now(),
+      });
+      await showToast({
+        state: 'importing',
+        text: `正在合併至 Part ${partNumber}... (${totalImported}/${urls.length})`,
+        subtext: `Merging into Part ${partNumber}... (${totalImported}/${urls.length})`,
+        progress: pct,
+      });
+
+      const chunkResult = await importUrlsToNlm(chunk, targetNbId, authuser);
+      if (chunkResult.success) {
+        totalImported += chunk.length;
+        lastImportedNbId = targetNbId;
+      }
+      partNumber++;
+      continue;
+    }
+
+    // No existing Part N — create a new one
+    const chunk = remainingUrls.slice(0, limit);
     remainingUrls = remainingUrls.slice(limit);
 
     await setImportStatus({
       active: true, pageTitle, totalUrls: urls.length,
       importedCount: totalImported,
-      phase: `Creating "${pageTitle} - Part ${partNumber}"...`,
+      phase: `Creating "${partTitle}"...`,
       startedAt: Date.now(),
     });
+    await showToast({
+      state: 'importing',
+      text: `正在建立 Part ${partNumber}... (${totalImported}/${urls.length})`,
+      subtext: `Creating Part ${partNumber}... (${totalImported}/${urls.length})`,
+      progress: pct,
+    });
 
-    // Create new notebook via direct API (no tab needed)
-    const newNbId = await createNlmNotebook(`${pageTitle} - Part ${partNumber}`, authuser);
+    const newNbId = await createNlmNotebook(partTitle, authuser);
+    clearNotebookCache();
     if (!newNbId) {
       const queue = createBatchQueue(remainingUrls.length > 0 ? [...chunk, ...remainingUrls] : chunk, pageTitle);
       await saveQueue(queue);
@@ -593,63 +821,50 @@ async function runAutoSplitImport(
       return;
     }
 
-    // Wait for NLM to fully register the new notebook before adding sources
-    // The competitor uses rLM1Ne polling; we use a simpler delay
     console.log(`[VideoLM] Waiting 3s for notebook ${newNbId} to be ready...`);
     await new Promise(r => setTimeout(r, 3000));
 
     await setImportStatus({
       active: true, pageTitle, totalUrls: urls.length,
       importedCount: totalImported,
-      phase: `Importing ${chunk.length} to "${pageTitle} - Part ${partNumber}"...`,
+      phase: `Importing ${chunk.length} to "${partTitle}"...`,
       startedAt: Date.now(),
     });
+    await showToast({
+      state: 'importing',
+      text: `正在匯入至 Part ${partNumber}... (${totalImported}/${urls.length})`,
+      subtext: `Importing to Part ${partNumber}... (${totalImported}/${urls.length})`,
+      progress: Math.round((totalImported / urls.length) * 100),
+    });
 
-    // Import directly to the new notebook by ID
     const chunkResult = await importUrlsToNlm(chunk, newNbId, authuser);
     if (chunkResult.success) {
       totalImported += chunk.length;
+      lastImportedNbId = newNbId;
     }
 
     partNumber++;
   }
 
-  // Refresh NLM tab so user sees the new notebooks + sources immediately
-  try {
-    const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
-    if (nlmTabs[0]?.id) {
-      await chrome.tabs.reload(nlmTabs[0].id);
-      console.log('[VideoLM] Refreshed NLM tab');
-    }
-  } catch { /* tab may have been closed */ }
+  // Use the first notebook for navigation (user's primary interest)
+  const lastNbId = firstResultNbId || lastImportedNbId;
+  const lastAuthuser = firstResultAuthuser || authuser;
 
-  // All done! Play completion sound + update status
+  // All done — clear checkpoint queue
+  await clearQueue();
+
+  // Update status
   await setImportStatus({
     active: false, pageTitle, totalUrls: urls.length,
     importedCount: totalImported, phase: 'Complete', startedAt: Date.now(),
     completed: true,
-    completionMessage: `All ${totalImported} videos imported across ${partNumber - 1} notebooks!`,
+    completionMessage: partNumber > 2
+      ? `All ${totalImported} videos imported across ${partNumber - 1} notebooks!`
+      : `All ${totalImported} videos imported!`,
   });
 
-  // Play completion notification sound
-  try {
-    await chrome.offscreen?.createDocument?.({
-      url: 'about:blank',
-      reasons: ['AUDIO_PLAYBACK' as any],
-      justification: 'Play import completion sound',
-    });
-  } catch { /* offscreen may not be available */ }
-
-  // Use chrome.notifications as fallback
-  try {
-    chrome.notifications.create('videolm-import-done', {
-      type: 'basic',
-      iconUrl: 'icons/icon128.png',
-      title: 'VideoLM Import Complete',
-      message: `All ${totalImported} videos from "${pageTitle}" have been imported!`,
-      silent: false, // This triggers the system notification sound
-    });
-  } catch { /* notifications may not be available */ }
+  // Refresh NLM tab + show notification (shared helper)
+  await postImportActions(lastNbId, lastAuthuser, totalImported, pageTitle);
 }
 
 // ---------------------------------------------------------------------------
@@ -976,12 +1191,54 @@ chrome.runtime.onMessage.addListener(
       case 'QUICK_IMPORT': {
         (async () => {
           try {
+            // Set toast tab to the active YouTube tab
+            const [ytTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (ytTab?.id) setToastTab(ytTab.id);
+
             const rawVideoUrl = (message as any).videoUrl as string | string[];
             const videoTitle = (message as any).videoTitle as string | undefined;
             const urls = Array.isArray(rawVideoUrl) ? rawVideoUrl : [rawVideoUrl];
-            sendResponse(await importUrlsToNlm(urls.filter(Boolean), undefined, undefined, videoTitle));
+
+            await showToast({
+              state: 'importing',
+              text: `正在匯入「${videoTitle || '影片'}」...`,
+              subtext: `Importing "${videoTitle || 'video'}"...`,
+              progress: 50,
+            });
+
+            // Check merge strategy — auto-merge into matching notebook if set
+            let targetNbId: string | undefined;
+            let targetAuth: string | undefined;
+            const qiSettings = await getSettings();
+            if ((qiSettings.duplicateStrategy === 'merge' || qiSettings.duplicateStrategy === 'ask') && videoTitle) {
+              const nlmCheckTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
+              const qiAuthuser = nlmCheckTabs[0]?.url
+                ? (() => { try { return new URL(nlmCheckTabs[0].url!).searchParams.get('authuser') || ''; } catch { return ''; } })()
+                : '';
+              const matches = findMatchingNotebooks(await listNlmNotebooks(qiAuthuser), videoTitle);
+              if (matches.length > 0) {
+                targetNbId = matches[0].id;
+                targetAuth = qiAuthuser;
+              }
+            }
+
+            const result = await importUrlsToNlm(
+              urls.filter(Boolean),
+              targetNbId,
+              targetAuth,
+              targetNbId ? undefined : videoTitle,
+            );
+            sendResponse(result);
+
+            // Post-import: refresh NLM tab + toast + notification
+            if (result.success && result.notebookId) {
+              await postImportActions(result.notebookId, result.authuser || '', urls.length, videoTitle || 'Video');
+            } else if (!result.success) {
+              await showToast({ state: 'error', text: `匯入失敗`, subtext: result.error || 'Import failed' });
+            }
           } catch (err) {
             sendResponse({ success: false, urlCount: 0, error: String(err) });
+            await showToast({ state: 'error', text: `匯入失敗`, subtext: String(err) });
           }
         })();
         return true;
@@ -1137,6 +1394,10 @@ chrome.runtime.onMessage.addListener(
       case 'BATCH_IMPORT': {
         (async () => {
           try {
+            // Set toast tab to the active YouTube tab
+            const [ytTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (ytTab?.id) setToastTab(ytTab.id);
+
             const { urls: rawUrls, pageTitle } = message as any;
             if (!rawUrls || rawUrls.length === 0) {
               sendResponse({ success: false, error: 'No URLs provided.' });
@@ -1155,15 +1416,13 @@ chrome.runtime.onMessage.addListener(
                   ? `All ${rawUrls.length} videos are already in this notebook.`
                   : 'No new videos to import.',
               });
+              await showToast({
+                state: 'success',
+                text: dupeCount > 0 ? `全部 ${rawUrls.length} 個影片已存在於筆記本中` : '沒有新影片需要匯入',
+                subtext: dupeCount > 0 ? `All ${rawUrls.length} videos are already in this notebook` : 'No new videos to import',
+              });
               return;
             }
-
-            // Respond immediately — import runs in background
-            const dupeMsg = dupeCount > 0 ? ` (${dupeCount} duplicates skipped)` : '';
-            sendResponse({
-              success: true, importing: true,
-              message: `Importing ${uniqueUrls.length} videos in background...${dupeMsg} You can close this popup.`,
-            });
 
             // Get authuser from NLM tab for multi-account support
             const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
@@ -1172,13 +1431,144 @@ chrome.runtime.onMessage.addListener(
               try { authuser = new URL(nlmTabs[0].url).searchParams.get('authuser') || ''; } catch {}
             }
 
-            // Run full auto-split import in background
-            await runAutoSplitImport(uniqueUrls, pageTitle, nbInfo.count, nbInfo.limit, authuser);
+            // Check duplicate strategy BEFORE responding to popup
+            const settings = await getSettings();
+            const strategy = settings.duplicateStrategy || 'ask';
+
+            if (strategy !== 'create') {
+              const allNotebooks = await listNlmNotebooks(authuser);
+              console.log(`[VideoLM] Dedup: strategy=${strategy}, pageTitle="${pageTitle}", notebooks=${allNotebooks.length}, names=[${allNotebooks.map(n => `"${n.name}"`).join(', ')}]`);
+              const matches = findMatchingNotebooks(allNotebooks, pageTitle);
+              console.log(`[VideoLM] Dedup: matches=${matches.length}${matches.length > 0 ? `, best="${matches[0].name}"` : ''}`);
+
+              if (matches.length > 0) {
+                const bestMatch = matches[0];
+
+                // Source-level dedup: filter out URLs already in matched notebooks
+                const { uniqueUrls: dedupedUrls, skippedCount: sourceSkipped } = deduplicateAgainstNotebooks(uniqueUrls, matches);
+                let totalSkipped = dupeCount + sourceSkipped;
+                console.log(`[VideoLM] Dedup result: input=${uniqueUrls.length}, afterDedup=${dedupedUrls.length}, sourceSkipped=${sourceSkipped}`);
+                if (dedupedUrls.length > 0) {
+                  // Log the remaining URLs that weren't deduped
+                  console.log(`[VideoLM] Remaining URLs after dedup:`, dedupedUrls);
+                }
+
+                if (dedupedUrls.length === 0) {
+                  const nbLabel = matches.length > 1 ? '等相關筆記本' : '';
+                  sendResponse({ success: true, message: `All ${rawUrls.length} videos already exist in "${bestMatch.name}".` });
+                  await showToast({
+                    state: 'success',
+                    text: `全部 ${rawUrls.length} 個影片已存在於「${bestMatch.name}」${nbLabel}中`,
+                    subtext: `All ${rawUrls.length} videos already exist in "${bestMatch.name}"`,
+                  });
+                  return;
+                }
+
+                // Validate URLs — filter out deleted/private videos
+                await showToast({
+                  state: 'importing',
+                  text: `正在驗證 ${dedupedUrls.length} 個新網址...`,
+                  subtext: `Validating ${dedupedUrls.length} new URLs...`,
+                  progress: 50,
+                });
+                const { valid: validUrls, invalid: invalidUrls } = await filterValidYouTubeUrls(dedupedUrls);
+                totalSkipped += invalidUrls.length;
+
+                if (validUrls.length === 0) {
+                  sendResponse({ success: true, message: `No valid new videos. ${sourceSkipped} duplicates, ${invalidUrls.length} unavailable skipped.` });
+                  await showToast({
+                    state: 'success',
+                    text: `沒有可匯入的新影片（${sourceSkipped} 重複、${invalidUrls.length} 無效）`,
+                    subtext: `No valid new videos. ${sourceSkipped} duplicates, ${invalidUrls.length} unavailable skipped.`,
+                  });
+                  return;
+                }
+
+                if (strategy === 'merge') {
+                  const skipMsg = totalSkipped > 0 ? ` (${sourceSkipped} duplicates, ${invalidUrls.length} unavailable skipped)` : '';
+                  sendResponse({
+                    success: true, importing: true,
+                    message: `Merging ${validUrls.length} new videos into "${bestMatch.name}"...${skipMsg}`,
+                  });
+                  await runAutoSplitImport(validUrls, pageTitle, bestMatch.sourceCount, 50, authuser, bestMatch.id);
+                  return;
+                }
+
+                if (strategy === 'ask') {
+                  // Send choice back to popup — popup shows NotebookChoice UI
+                  sendResponse({
+                    success: true,
+                    needsUserChoice: true,
+                    existingNotebook: bestMatch,
+                    urls: validUrls,
+                    pageTitle,
+                    authuser,
+                  });
+                  return;
+                }
+              }
+            }
+
+            // Default: validate URLs then import in background
+            const { valid: defaultValidUrls, invalid: defaultInvalidUrls } = await filterValidYouTubeUrls(uniqueUrls);
+            const totalSkippedDefault = dupeCount + defaultInvalidUrls.length;
+            if (defaultValidUrls.length === 0) {
+              sendResponse({ success: true, message: `No valid videos to import.` });
+              await showToast({
+                state: 'success',
+                text: `沒有可匯入的影片（${defaultInvalidUrls.length} 個無效）`,
+                subtext: `No valid videos to import. ${defaultInvalidUrls.length} unavailable skipped.`,
+              });
+              return;
+            }
+            const skipMsg = totalSkippedDefault > 0 ? ` (${totalSkippedDefault} skipped)` : '';
+            sendResponse({
+              success: true, importing: true,
+              message: `Importing ${defaultValidUrls.length} videos in background...${skipMsg} You can close this popup.`,
+            });
+            // For create strategy (no match found), we auto-create a new notebook → existingCount=0
+            await runAutoSplitImport(defaultValidUrls, pageTitle, 0, 50, authuser);
 
           } catch (err) {
             sendResponse({ success: false, error: String(err) });
           }
         })();
+        return true;
+      }
+
+      case 'BATCH_IMPORT_WITH_TARGET': {
+        (async () => {
+          try {
+            const { urls, pageTitle, targetNotebookId, authuser, existingSourceCount } = message as any;
+            console.log(`[VideoLM] BATCH_IMPORT_WITH_TARGET: urls=${urls?.length}, target=${targetNotebookId}, existing=${existingSourceCount}`);
+            if (!urls?.length || !targetNotebookId) {
+              sendResponse({ success: false, error: 'Missing target notebook or URLs.' });
+              return;
+            }
+
+            const [ytTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (ytTab?.id) setToastTab(ytTab.id);
+
+            sendResponse({ success: true, importing: true, message: 'Merging into existing notebook...' });
+
+            await runAutoSplitImport(urls, pageTitle, existingSourceCount || 0, 50, authuser || '', targetNotebookId);
+          } catch (err) {
+            sendResponse({ success: false, error: String(err) });
+          }
+        })();
+        return true;
+      }
+
+      case 'GET_NOTEBOOK_CHOICE': {
+        chrome.storage.local.get('videolm_notebook_choice', (result) => {
+          sendResponse(result.videolm_notebook_choice || null);
+        });
+        return true;
+      }
+
+      case 'CLEAR_NOTEBOOK_CHOICE': {
+        chrome.storage.local.remove('videolm_notebook_choice');
+        sendResponse({ success: true });
         return true;
       }
 
@@ -1241,14 +1631,6 @@ chrome.runtime.onMessage.addListener(
       case 'CLEAR_IMPORT_STATUS' as any: {
         clearImportStatus().then(() => sendResponse({ ok: true }));
         return true;
-      }
-
-      case 'IMPORT_TO_NLM': {
-        sendResponse({
-          type: 'IMPORT_RESULT',
-          result: { success: false, error: 'Not yet implemented', tier: 1 as const },
-        });
-        break;
       }
 
       default:

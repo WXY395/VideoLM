@@ -6,6 +6,7 @@ function makeSettings(overrides: Partial<UserSettings> = {}): UserSettings {
   return {
     tier: 'free',
     defaultMode: 'structured',
+    duplicateStrategy: 'ask',
     monthlyUsage: { imports: 0, aiCalls: 0, resetDate: '2026-04-01' },
     ...overrides,
   };

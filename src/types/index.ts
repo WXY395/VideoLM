@@ -97,12 +97,16 @@ export interface BYOKConfig {
   model?: string;
 }
 
+/** How to handle duplicate notebooks when importing */
+export type DuplicateStrategy = 'ask' | 'merge' | 'create' | 'global-dedup';
+
 /** User-persisted settings */
 export interface UserSettings {
   tier: 'free' | 'pro';
   byok?: BYOKConfig;
   defaultMode: ImportMode;
   defaultTranslateLang?: string;
+  duplicateStrategy: DuplicateStrategy;
   monthlyUsage: {
     imports: number;
     aiCalls: number;
@@ -122,8 +126,6 @@ export interface DuplicateCheckResult {
 export type MessageType =
   | { type: 'GET_VIDEO_CONTENT' }
   | { type: 'VIDEO_CONTENT'; data: VideoContent }
-  | { type: 'IMPORT_TO_NLM'; content: string; options: ImportOptions }
-  | { type: 'IMPORT_RESULT'; result: ImportResult }
   | { type: 'API_FORMAT_CAPTURED'; data: unknown }
   | { type: 'GET_SOURCE_LIST' }
   | { type: 'SOURCE_LIST'; data: Array<{ title: string; url?: string }> }
@@ -138,5 +140,8 @@ export type MessageType =
   | { type: 'EXTRACT_VIDEO_URLS' }
   | { type: 'VIDEO_URLS_RESULT'; urls: string[]; pageType: string; pageTitle: string; totalVisible: number }
   | { type: 'BATCH_IMPORT'; urls: string[]; pageTitle: string }
+  | { type: 'BATCH_IMPORT_WITH_TARGET'; urls: string[]; pageTitle: string; targetNotebookId: string; authuser?: string; existingSourceCount?: number }
+  | { type: 'GET_NOTEBOOK_CHOICE' }
+  | { type: 'CLEAR_NOTEBOOK_CHOICE' }
   | { type: 'RESUME_BATCH' }
   | { type: 'CHECK_PENDING_QUEUE' };

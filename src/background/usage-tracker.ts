@@ -21,6 +21,7 @@ function getFirstOfNextMonth(): string {
 export const defaultSettings: UserSettings = {
   tier: 'free',
   defaultMode: 'raw',
+  duplicateStrategy: 'ask',
   monthlyUsage: {
     imports: 0,
     aiCalls: 0,
@@ -64,9 +65,9 @@ export async function saveSettings(settings: UserSettings): Promise<void> {
 /**
  * Increment a usage counter (imports or aiCalls) and persist.
  */
-export async function incrementUsage(type: 'imports' | 'aiCalls'): Promise<void> {
+export async function incrementUsage(type: 'imports' | 'aiCalls', count = 1): Promise<void> {
   const settings = await getSettings();
-  settings.monthlyUsage[type] += 1;
+  settings.monthlyUsage[type] += count;
   await saveSettings(settings);
 }
 
@@ -74,8 +75,8 @@ export async function incrementUsage(type: 'imports' | 'aiCalls'): Promise<void>
  * Check whether the user can import and/or use AI based on their tier and usage.
  *
  * Limits:
- *   - Free:       10 imports/month, 0 AI calls (unless BYOK)
- *   - Free+BYOK:  30 imports/month, unlimited AI (user pays)
+ *   - Free:       100 imports/month, 0 AI calls (unless BYOK)
+ *   - Free+BYOK:  300 imports/month, unlimited AI (user pays)
  *   - Pro:        unlimited everything
  */
 export function checkQuota(settings: UserSettings): { canImport: boolean; canUseAI: boolean } {
