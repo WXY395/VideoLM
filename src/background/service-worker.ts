@@ -296,7 +296,7 @@ function deduplicateAgainstExisting(urls: string[], existingUrls: string[]): str
  * using session credentials from the NLM page. Zero UI interference,
  * no "已達上限" warnings, ~500ms per source.
  */
-async function importUrlsToNlm(urls: string[], targetNotebookId?: string, targetAuthuser?: string): Promise<{
+async function importUrlsToNlm(urls: string[], targetNotebookId?: string, targetAuthuser?: string, autoCreateTitle?: string): Promise<{
   success: boolean;
   error?: string;
   urlCount: number;
@@ -314,33 +314,37 @@ async function importUrlsToNlm(urls: string[], targetNotebookId?: string, target
   let authuser = targetAuthuser || '';
 
   if (!notebookId) {
+    // Try to get notebook ID from an open NLM tab
     const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
 
-    if (nlmTabs.length === 0 || !nlmTabs[0].id) {
-      await chrome.tabs.create({ url: 'https://notebooklm.google.com/', active: true });
-      return {
-        success: false, clipboardText: urls.join('\n'), urlCount,
-        error: 'Please open a notebook in NotebookLM first, then try again.',
-      };
+    if (nlmTabs[0]?.url?.includes('/notebook/')) {
+      const nbMatch = nlmTabs[0].url.match(/\/notebook\/([a-f0-9-]+)/);
+      notebookId = nbMatch ? nbMatch[1] : '';
+      try { authuser = new URL(nlmTabs[0].url).searchParams.get('authuser') || ''; } catch {}
     }
 
-    const nlmUrl = nlmTabs[0].url || '';
-    if (!nlmUrl.includes('/notebook/')) {
-      await chrome.tabs.update(nlmTabs[0].id, { active: true });
-      return {
-        success: false, clipboardText: urls.join('\n'), urlCount,
-        error: 'Please open a specific notebook in NotebookLM, then try again.',
-      };
+    // If still no notebook, try to get authuser from NLM homepage tab
+    if (!notebookId && nlmTabs[0]?.url) {
+      try { authuser = new URL(nlmTabs[0].url).searchParams.get('authuser') || ''; } catch {}
     }
+  }
 
-    const nbMatch = nlmUrl.match(/\/notebook\/([a-f0-9-]+)/);
-    notebookId = nbMatch ? nbMatch[1] : '';
-    const nlmUrlObj = new URL(nlmUrl);
-    authuser = nlmUrlObj.searchParams.get('authuser') || '';
+  // Auto-create a notebook if none is open and a title is provided
+  if (!notebookId && autoCreateTitle) {
+    console.log(`[VideoLM] No notebook open — auto-creating "${autoCreateTitle}"`);
+    const newId = await createNlmNotebook(autoCreateTitle, authuser);
+    if (newId) {
+      notebookId = newId;
+      console.log(`[VideoLM] Auto-created notebook: ${newId}`);
+      // Wait for NLM to register the notebook
+      await new Promise(r => setTimeout(r, 3000));
+    } else {
+      return { success: false, urlCount, error: 'Could not auto-create notebook. Please open NotebookLM and try again.' };
+    }
   }
 
   if (!notebookId) {
-    return { success: false, urlCount, error: 'Cannot determine notebook ID.' };
+    return { success: false, urlCount, error: 'No notebook found. Please open NotebookLM or try again.' };
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -546,7 +550,7 @@ async function runAutoSplitImport(
     startedAt: Date.now(),
   });
 
-  const firstResult = await importUrlsToNlm(firstBatch);
+  const firstResult = await importUrlsToNlm(firstBatch, undefined, undefined, pageTitle);
   let totalImported = firstResult.success ? firstBatch.length : 0;
 
   if (!firstResult.success) {
@@ -973,8 +977,9 @@ chrome.runtime.onMessage.addListener(
         (async () => {
           try {
             const rawVideoUrl = (message as any).videoUrl as string | string[];
+            const videoTitle = (message as any).videoTitle as string | undefined;
             const urls = Array.isArray(rawVideoUrl) ? rawVideoUrl : [rawVideoUrl];
-            sendResponse(await importUrlsToNlm(urls.filter(Boolean)));
+            sendResponse(await importUrlsToNlm(urls.filter(Boolean), undefined, undefined, videoTitle));
           } catch (err) {
             sendResponse({ success: false, urlCount: 0, error: String(err) });
           }
