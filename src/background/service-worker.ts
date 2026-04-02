@@ -1409,7 +1409,9 @@ chrome.runtime.onMessage.addListener(
             const [ytTab] = await chrome.tabs.query({ active: true, currentWindow: true });
             if (ytTab?.id) setToastTab(ytTab.id);
 
-            const { urls: rawUrls, pageTitle } = message as any;
+            const { urls: rawUrls, pageTitle: rawPageTitle } = message as any;
+            // Fallback: if content script didn't extract a title, use a generic one
+            const pageTitle = rawPageTitle || `YouTube Import (${rawUrls?.length || 0} videos)`;
 
             // Immediate toast — user sees feedback right away
             await showToast({
