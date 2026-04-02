@@ -30,7 +30,10 @@
         "https://www.youtube.com/results*",
         "https://www.youtube.com/channel/*"
       ],
-      "js": ["src/content-scripts/youtube.ts"],
+      "js": [
+        "src/content-scripts/toast-ui.ts",
+        "src/content-scripts/youtube.ts"
+      ],
       "run_at": "document_idle"
     },
     {

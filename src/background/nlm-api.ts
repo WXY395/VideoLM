@@ -12,15 +12,26 @@ export interface NlmNotebook {
 }
 
 // ---------------------------------------------------------------------------
+// Timeout utility — prevents API calls from hanging indefinitely
+// ---------------------------------------------------------------------------
+
+function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 10000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
+// ---------------------------------------------------------------------------
 // Session token helpers
 // ---------------------------------------------------------------------------
 
 async function fetchSessionTokens(authuser = ''): Promise<{ bl: string; atToken: string } | null> {
   const authuserParam = authuser ? `?authuser=${authuser}&pageId=none` : '';
   try {
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `https://notebooklm.google.com/${authuserParam}`,
       { redirect: 'error' },
+      8000,
     );
     if (!resp.ok) return null;
 
@@ -84,13 +95,14 @@ export async function listNlmNotebooks(authuser = ''): Promise<NlmNotebook[]> {
   const body = new URLSearchParams({ 'f.req': fReq, 'at': atToken });
 
   try {
-    const resp = await fetch(
+    const resp = await fetchWithTimeout(
       `https://notebooklm.google.com/_/LabsTailwindUi/data/batchexecute?${qp.toString()}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: body.toString(),
       },
+      10000,
     );
 
     if (!resp.ok) {

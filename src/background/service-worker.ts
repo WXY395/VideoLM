@@ -204,7 +204,8 @@ async function getNlmNotebookInfo(): Promise<{
       return { count: 0, limit: 50, existingUrls: [] };
     }
 
-    const [result] = await chrome.scripting.executeScript({
+    // Wrap executeScript with 5s timeout to prevent hanging
+    const execPromise = chrome.scripting.executeScript({
       target: { tabId: nlmTabs[0].id },
       world: 'MAIN' as any,
       func: () => {
@@ -268,6 +269,10 @@ async function getNlmNotebookInfo(): Promise<{
       },
       args: [],
     });
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('getNlmNotebookInfo timeout')), 5000),
+    );
+    const [result] = await Promise.race([execPromise, timeoutPromise]);
 
     return (result?.result as any) || { count: 0, limit: 50, existingUrls: [] };
   } catch {
@@ -1405,6 +1410,14 @@ chrome.runtime.onMessage.addListener(
             if (ytTab?.id) setToastTab(ytTab.id);
 
             const { urls: rawUrls, pageTitle } = message as any;
+
+            // Immediate toast — user sees feedback right away
+            await showToast({
+              state: 'importing',
+              text: `正在處理 ${rawUrls?.length || 0} 個影片...`,
+              subtext: `Processing ${rawUrls?.length || 0} videos...`,
+              progress: 10,
+            });
             if (!rawUrls || rawUrls.length === 0) {
               sendResponse({ success: false, error: 'No URLs provided.' });
               return;

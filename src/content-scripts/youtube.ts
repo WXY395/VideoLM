@@ -8,6 +8,23 @@
 // ---------------------------------------------------------------------------
 // Inline SVG icon (teal V mark from VideoLM logo)
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Toast helper — calls toast-ui.ts which runs in the same ISOLATED world
+// ---------------------------------------------------------------------------
+function showToastUI(opts: {
+  state: 'importing' | 'success' | 'error';
+  text: string;
+  subtext?: string;
+  progress?: number;
+  viewUrl?: string;
+  dismissAfter?: number;
+}): void {
+  const fn = (window as any).__videolm_showToast;
+  if (typeof fn === 'function') {
+    fn(opts);
+  }
+}
+
 const VIDEOLM_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none">
   <path d="M4 4L12 20L17 10L20 10" stroke="#00838F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
   <circle cx="20" cy="6" r="2" fill="#FFB300"/>
@@ -136,21 +153,31 @@ function injectVideoButton(): void {
     e.preventDefault();
     e.stopPropagation();
 
-    // Visual feedback
+    const title = getVideoTitle() || '影片';
+
+    // Visual feedback — button state change (instant)
     btn.style.backgroundColor = '#00838F';
     btn.style.color = '#fff';
     const labelEl = btn.querySelector('span:last-child') as HTMLSpanElement;
     const originalLabel = labelEl.textContent;
     labelEl.textContent = 'Importing...';
 
+    // Toast feedback — content-script native (instant, no SW round-trip)
+    showToastUI({
+      state: 'importing',
+      text: `正在匯入「${title}」...`,
+      subtext: `Importing "${title}"...`,
+      progress: 50,
+    });
+
     safeSendMessage(
       {
         type: 'QUICK_IMPORT',
         videoUrl: location.href,
-        videoTitle: getVideoTitle(),
+        videoTitle: title,
       },
       (_response) => {
-        // Reset button after response
+        // Reset button after response (toast will be updated by SW)
         setTimeout(() => {
           btn.style.backgroundColor = 'var(--yt-spec-badge-chip-background, #f2f2f2)';
           btn.style.color = 'var(--yt-spec-text-primary, #0f0f0f)';
@@ -192,7 +219,7 @@ function injectChannelButton(): void {
     e.preventDefault();
     e.stopPropagation();
 
-    // Visual feedback
+    // Visual feedback — button state change (instant)
     btn.style.backgroundColor = '#00838F';
     btn.style.color = '#fff';
     const labelEl = btn.querySelector('span:last-child') as HTMLSpanElement;
@@ -202,6 +229,15 @@ function injectChannelButton(): void {
     const urls = extractVideoUrlsFromDom();
     if (urls.length > 0) {
       labelEl.textContent = `Importing ${urls.length}...`;
+
+      // Toast feedback — content-script native (instant)
+      showToastUI({
+        state: 'importing',
+        text: `正在處理 ${urls.length} 個影片...`,
+        subtext: `Processing ${urls.length} videos...`,
+        progress: 10,
+      });
+
       safeSendMessage(
         {
           type: 'BATCH_IMPORT',
@@ -209,6 +245,7 @@ function injectChannelButton(): void {
           pageTitle: getPageTitle(),
         },
         () => {
+          // Reset button (toast will be updated by SW via tabs.sendMessage)
           setTimeout(() => {
             btn.style.backgroundColor = 'var(--yt-spec-badge-chip-background, #f2f2f2)';
             btn.style.color = 'var(--yt-spec-text-primary, #0f0f0f)';
@@ -218,6 +255,12 @@ function injectChannelButton(): void {
       );
     } else {
       labelEl.textContent = 'No videos found';
+      showToastUI({
+        state: 'error',
+        text: '找不到影片',
+        subtext: 'No videos found on this page',
+        dismissAfter: 3000,
+      });
       setTimeout(() => {
         btn.style.backgroundColor = 'var(--yt-spec-badge-chip-background, #f2f2f2)';
         btn.style.color = 'var(--yt-spec-text-primary, #0f0f0f)';
@@ -257,6 +300,15 @@ function injectPlaylistButton(): void {
     const urls = extractVideoUrlsFromDom();
     if (urls.length > 0) {
       labelEl.textContent = `Importing ${urls.length}...`;
+
+      // Toast feedback — content-script native (instant)
+      showToastUI({
+        state: 'importing',
+        text: `正在處理 ${urls.length} 個影片...`,
+        subtext: `Processing ${urls.length} videos...`,
+        progress: 10,
+      });
+
       safeSendMessage(
         {
           type: 'BATCH_IMPORT',
@@ -273,6 +325,12 @@ function injectPlaylistButton(): void {
       );
     } else {
       labelEl.textContent = 'No videos found';
+      showToastUI({
+        state: 'error',
+        text: '找不到影片',
+        subtext: 'No videos found on this page',
+        dismissAfter: 3000,
+      });
       setTimeout(() => {
         btn.style.backgroundColor = 'var(--yt-spec-badge-chip-background, #f2f2f2)';
         btn.style.color = 'var(--yt-spec-text-primary, #0f0f0f)';
