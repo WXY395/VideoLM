@@ -318,19 +318,25 @@ async function filterValidYouTubeUrls(urls: string[]): Promise<{ valid: string[]
   const valid: string[] = [];
   const invalid: string[] = [];
 
-  // Batch check in parallel (max 10 concurrent)
+  // Batch check in parallel (max 10 concurrent, 5s timeout per request)
   const CONCURRENCY = 10;
+  const TIMEOUT_MS = 5000;
   for (let i = 0; i < urls.length; i += CONCURRENCY) {
     const batch = urls.slice(i, i + CONCURRENCY);
     const results = await Promise.all(
       batch.map(async (url) => {
         try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
           const resp = await fetch(
             `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`,
+            { signal: controller.signal },
           );
+          clearTimeout(timer);
           return { url, ok: resp.ok };
         } catch {
-          return { url, ok: false };
+          // Timeout or network error — assume valid (don't block import)
+          return { url, ok: true };
         }
       }),
     );
@@ -1464,15 +1470,10 @@ chrome.runtime.onMessage.addListener(
                   return;
                 }
 
-                // Validate URLs — filter out deleted/private videos
-                await showToast({
-                  state: 'importing',
-                  text: `正在驗證 ${dedupedUrls.length} 個新網址...`,
-                  subtext: `Validating ${dedupedUrls.length} new URLs...`,
-                  progress: 50,
-                });
-                const { valid: validUrls, invalid: invalidUrls } = await filterValidYouTubeUrls(dedupedUrls);
-                totalSkipped += invalidUrls.length;
+                // Skip oEmbed validation for now — adds latency and YouTube oEmbed
+                // can hang in service worker context. Will revisit for Pro version.
+                const validUrls = dedupedUrls;
+                const invalidUrls: string[] = [];
 
                 if (validUrls.length === 0) {
                   sendResponse({ success: true, message: `No valid new videos. ${sourceSkipped} duplicates, ${invalidUrls.length} unavailable skipped.` });
@@ -1486,6 +1487,12 @@ chrome.runtime.onMessage.addListener(
 
                 if (strategy === 'merge') {
                   const skipMsg = totalSkipped > 0 ? ` (${sourceSkipped} duplicates, ${invalidUrls.length} unavailable skipped)` : '';
+                  await showToast({
+                    state: 'importing',
+                    text: `正在匯入 ${validUrls.length} 個新影片到「${bestMatch.name}」...`,
+                    subtext: `Importing ${validUrls.length} new videos into "${bestMatch.name}"...`,
+                    progress: 30,
+                  });
                   sendResponse({
                     success: true, importing: true,
                     message: `Merging ${validUrls.length} new videos into "${bestMatch.name}"...${skipMsg}`,
@@ -1509,8 +1516,9 @@ chrome.runtime.onMessage.addListener(
               }
             }
 
-            // Default: validate URLs then import in background
-            const { valid: defaultValidUrls, invalid: defaultInvalidUrls } = await filterValidYouTubeUrls(uniqueUrls);
+            // Default: skip oEmbed validation, import directly
+            const defaultValidUrls = uniqueUrls;
+            const defaultInvalidUrls: string[] = [];
             const totalSkippedDefault = dupeCount + defaultInvalidUrls.length;
             if (defaultValidUrls.length === 0) {
               sendResponse({ success: true, message: `No valid videos to import.` });
@@ -1522,6 +1530,12 @@ chrome.runtime.onMessage.addListener(
               return;
             }
             const skipMsg = totalSkippedDefault > 0 ? ` (${totalSkippedDefault} skipped)` : '';
+            await showToast({
+              state: 'importing',
+              text: `正在匯入 ${defaultValidUrls.length} 個影片...`,
+              subtext: `Importing ${defaultValidUrls.length} videos...`,
+              progress: 30,
+            });
             sendResponse({
               success: true, importing: true,
               message: `Importing ${defaultValidUrls.length} videos in background...${skipMsg} You can close this popup.`,
