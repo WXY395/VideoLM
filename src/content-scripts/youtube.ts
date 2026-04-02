@@ -96,14 +96,14 @@ function injectVideoButton(): void {
   // Not a watch page
   if (!location.pathname.startsWith('/watch')) return;
 
-  // Target: the actions container next to like/share/save
-  // YouTube uses different structures, try multiple selectors
-  const actionsContainer =
-    document.querySelector('#top-level-buttons-computed') || // Standard desktop
-    document.querySelector('ytd-menu-renderer.ytd-watch-metadata #top-level-buttons-computed') ||
-    document.querySelector('#actions-inner #menu #top-level-buttons-computed');
+  // Inject into #owner row (channel name + subscribe area).
+  // This container is STABLE across SPA navigations — YouTube updates it
+  // in-place rather than replacing the entire subtree like #actions.
+  const ownerContainer =
+    document.querySelector('ytd-watch-metadata #owner') ||
+    document.querySelector('#above-the-fold #owner');
 
-  if (!actionsContainer) return;
+  if (!ownerContainer) return;
 
   const btn = createNlmButton(BUTTON_ID_VIDEO, 'NotebookLM');
 
@@ -135,7 +135,8 @@ function injectVideoButton(): void {
     );
   });
 
-  actionsContainer.appendChild(btn);
+  // Append to #owner — appears after subscribe button, stays across SPA nav
+  ownerContainer.appendChild(btn);
 }
 
 // ---------------------------------------------------------------------------
@@ -146,16 +147,19 @@ function injectChannelButton(): void {
 
   // Channel page patterns: /@handle, /@handle/videos, /channel/ID
   const isChannel =
-    /^\/@[^/]+\/?/.test(location.pathname) || location.pathname.startsWith('/channel/');
+    /^\/@[^/]+/.test(location.pathname) || location.pathname.startsWith('/channel/');
   if (!isChannel) return;
 
-  // Target: the subscribe button container area
-  const subscribeContainer =
-    document.querySelector('#subscribe-button') || // Standard
-    document.querySelector('#channel-header #subscribe-button') ||
-    document.querySelector('ytd-c4-tabbed-header-renderer #subscribe-button');
+  // Strategy 1: New YouTube layout — yt-flexible-actions-view-model (2024+)
+  // Strategy 2: Legacy — #subscribe-button inside channel header
+  // Strategy 3: Fallback — #owner container (top-row area)
+  const targetContainer =
+    document.querySelector('yt-page-header-renderer yt-flexible-actions-view-model') ||
+    document.querySelector('yt-page-header-renderer #buttons') ||
+    document.querySelector('#channel-header-container #buttons') ||
+    document.querySelector('#owner');
 
-  if (!subscribeContainer) return;
+  if (!targetContainer) return;
 
   const btn = createNlmButton(BUTTON_ID_CHANNEL, 'NotebookLM');
 
@@ -198,8 +202,8 @@ function injectChannelButton(): void {
     });
   });
 
-  // Insert after the subscribe button
-  subscribeContainer.parentElement?.insertBefore(btn, subscribeContainer.nextSibling);
+  // Append to the actions container
+  targetContainer.appendChild(btn);
 }
 
 // ---------------------------------------------------------------------------
@@ -278,7 +282,7 @@ function getChannelName(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Injection orchestrator — tries to inject buttons, retries via observer
+// Injection orchestrator
 // ---------------------------------------------------------------------------
 function tryInjectButtons(): void {
   injectVideoButton();
@@ -286,7 +290,6 @@ function tryInjectButtons(): void {
   injectPlaylistButton();
 }
 
-// Remove all injected buttons (for SPA navigation cleanup)
 function removeAllButtons(): void {
   document.getElementById(BUTTON_ID_VIDEO)?.remove();
   document.getElementById(BUTTON_ID_CHANNEL)?.remove();
@@ -294,36 +297,81 @@ function removeAllButtons(): void {
 }
 
 // ---------------------------------------------------------------------------
-// SPA navigation detection + button injection
+// Targeted MutationObserver — watches for anchor elements to appear
+// Pattern used by Return YouTube Dislike, Enhancer for YouTube, etc.
+//
+// Instead of polling with setTimeout, we observe the DOM for the specific
+// elements we need (share button, subscribe area, etc.) and inject the
+// moment they appear. This is instant and reliable across SPA navigations.
 // ---------------------------------------------------------------------------
 let lastUrl = location.href;
 
-function onNavigate(): void {
+/**
+ * Single MutationObserver that fires on every DOM change.
+ * Lightweight: just checks if our button exists, if not, tries to inject.
+ */
+const observer = new MutationObserver(() => {
+  // Detect SPA navigation
   if (location.href !== lastUrl) {
     lastUrl = location.href;
-    // URL changed — remove old buttons, inject new ones after DOM settles
     removeAllButtons();
-    setTimeout(tryInjectButtons, 1000);
-    setTimeout(tryInjectButtons, 3000); // Retry for slow-loading pages
   }
-}
 
-// Initial injection (with retries for slow DOM rendering)
-setTimeout(tryInjectButtons, 1500);
-setTimeout(tryInjectButtons, 4000);
+  // Try to inject if button is missing on this page type
+  const path = location.pathname;
 
-// MutationObserver for SPA navigation + dynamic DOM changes
-const observer = new MutationObserver(() => {
-  onNavigate();
-  // Also try injecting if buttons don't exist yet (DOM may have rendered)
-  tryInjectButtons();
+  if (path.startsWith('/watch') && !document.getElementById(BUTTON_ID_VIDEO)) {
+    injectVideoButton();
+  } else if (
+    (/^\/@[^/]+/.test(path) || path.startsWith('/channel/')) &&
+    !document.getElementById(BUTTON_ID_CHANNEL)
+  ) {
+    injectChannelButton();
+  } else if (
+    path.startsWith('/playlist') &&
+    !document.getElementById('videolm-nlm-btn-playlist')
+  ) {
+    injectPlaylistButton();
+  }
 });
-observer.observe(document.documentElement, { childList: true, subtree: true });
 
-// YouTube-specific navigation events
+observer.observe(document.body, { childList: true, subtree: true });
+
+// YouTube fires this custom event after SPA navigation completes
 document.addEventListener('yt-navigate-finish', () => {
   removeAllButtons();
-  setTimeout(tryInjectButtons, 1000);
-  setTimeout(tryInjectButtons, 3000);
+  tryInjectButtons();
 });
-window.addEventListener('popstate', onNavigate);
+
+// Also handle yt-page-data-updated (fires when page data is fully loaded)
+document.addEventListener('yt-page-data-updated', () => {
+  tryInjectButtons();
+});
+
+// Initial injection for hard page loads
+tryInjectButtons();
+
+// ---------------------------------------------------------------------------
+// Heartbeat — safety net every 1s for cases where observer misses
+// This is the same pattern used by Return YouTube Dislike, SponsorBlock, etc.
+// Lightweight: just an getElementById check + inject if missing.
+// ---------------------------------------------------------------------------
+setInterval(() => {
+  const path = location.pathname;
+
+  // Detect URL change (backup for observer)
+  if (location.href !== lastUrl) {
+    lastUrl = location.href;
+    removeAllButtons();
+  }
+
+  if (path.startsWith('/watch') && !document.getElementById(BUTTON_ID_VIDEO)) {
+    injectVideoButton();
+  }
+  if ((/^\/@[^/]+/.test(path) || path.startsWith('/channel/')) && !document.getElementById(BUTTON_ID_CHANNEL)) {
+    injectChannelButton();
+  }
+  if (path.startsWith('/playlist') && !document.getElementById('videolm-nlm-btn-playlist')) {
+    injectPlaylistButton();
+  }
+}, 1000);
