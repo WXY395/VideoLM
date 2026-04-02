@@ -31,9 +31,15 @@ export interface ImportStatus {
   needsNewNotebook?: boolean;
   /** Remaining URL count for next notebook */
   remainingCount?: number;
+  /** Timestamp when import completed (for expiry calculation) */
+  completedAt?: number;
 }
 
 export async function setImportStatus(status: ImportStatus): Promise<void> {
+  // Auto-set completedAt when transitioning to completed
+  if (status.completed && !status.completedAt) {
+    status.completedAt = Date.now();
+  }
   await chrome.storage.local.set({ [STATUS_KEY]: status });
   // Also update the extension badge
   if (status.active) {
@@ -53,10 +59,10 @@ export async function getImportStatus(): Promise<ImportStatus | null> {
   const result = await chrome.storage.local.get(STATUS_KEY);
   const status = (result[STATUS_KEY] as ImportStatus) ?? null;
 
-  // Auto-expire completed statuses after 60 seconds
-  // This prevents stale "Importing..." or "Complete" messages from blocking the UI
+  // Auto-expire completed statuses after 60 seconds from completion time
   if (status && !status.active) {
-    const age = Date.now() - status.startedAt;
+    const completedTime = status.completedAt || status.startedAt;
+    const age = Date.now() - completedTime;
     if (age > 60_000) {
       await clearImportStatus();
       return null;
