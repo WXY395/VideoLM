@@ -16,7 +16,7 @@ export interface UseVideoContentResult {
 function getPageType(url: string): PageType {
   if (url.includes('/watch?v=')) return 'watch';
   if (url.includes('/playlist?list=')) return 'playlist';
-  if (url.match(/@[^/]+/)) return 'channel';
+  if (url.includes('/@') || url.includes('/channel/')) return 'channel';
   if (url.includes('/results?search_query=')) return 'search';
   return 'unknown';
 }
