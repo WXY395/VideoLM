@@ -5,6 +5,10 @@
  * 3. NotebookLM button injection on video & channel pages
  */
 
+import { t } from '@/utils/i18n';
+import { queryFirst } from '@/utils/dom';
+import { YT } from '@/config/selectors';
+
 // ---------------------------------------------------------------------------
 // Inline SVG icon (teal V mark from VideoLM logo)
 // ---------------------------------------------------------------------------
@@ -19,7 +23,7 @@ function showToastUI(opts: {
   viewUrl?: string;
   dismissAfter?: number;
 }): void {
-  const fn = (window as any).__videolm_showToast;
+  const fn = (window as any)[Symbol.for('videolm_showToast')];
   if (typeof fn === 'function') {
     fn(opts);
   }
@@ -32,6 +36,8 @@ const VIDEOLM_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2
 
 const BUTTON_ID_VIDEO = 'videolm-nlm-btn-video';
 const BUTTON_ID_CHANNEL = 'videolm-nlm-btn-channel';
+const BUTTON_ID_PLAYLIST = 'videolm-nlm-btn-playlist'; // L-1 FIX: was inline string
+const BUTTON_ID_SEARCH = 'videolm-nlm-btn-search';
 
 // ---------------------------------------------------------------------------
 // Message handler
@@ -64,15 +70,25 @@ function isExtensionAlive(): boolean {
 
 /**
  * Safe sendMessage — checks extension context first.
- * If dead, reloads the page to get a fresh content script.
+ * H-3 FIX: Show toast warning instead of force-reloading the page.
  */
 function safeSendMessage(message: any, callback?: (response: any) => void): void {
   if (!isExtensionAlive()) {
-    // Extension was reloaded — need a page refresh for fresh content script
-    location.reload();
+    // Extension was reloaded — show a gentle warning instead of force-reloading
+    showToastUI({
+      state: 'error',
+      text: t('toast_extension_updated'),
+      dismissAfter: 8000,
+    });
     return;
   }
-  chrome.runtime.sendMessage(message, callback);
+  // H-4 FIX: Check chrome.runtime.lastError in callback
+  chrome.runtime.sendMessage(message, (response) => {
+    if (chrome.runtime.lastError) {
+      console.log('[VideoLM] sendMessage error:', chrome.runtime.lastError.message);
+    }
+    callback?.(response);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -141,13 +157,10 @@ function injectVideoButton(): void {
   // Inject into #owner row (channel name + subscribe area).
   // This container is STABLE across SPA navigations — YouTube updates it
   // in-place rather than replacing the entire subtree like #actions.
-  const ownerContainer =
-    document.querySelector('ytd-watch-metadata #owner') ||
-    document.querySelector('#above-the-fold #owner');
-
+  const ownerContainer = queryFirst(YT.INJECT.VIDEO);
   if (!ownerContainer) return;
 
-  const btn = createNlmButton(BUTTON_ID_VIDEO, 'NotebookLM');
+  const btn = createNlmButton(BUTTON_ID_VIDEO, t('btn_notebooklm'));
 
   btn.addEventListener('click', (e) => {
     e.preventDefault();
@@ -160,13 +173,12 @@ function injectVideoButton(): void {
     btn.style.color = '#fff';
     const labelEl = btn.querySelector('span:last-child') as HTMLSpanElement;
     const originalLabel = labelEl.textContent;
-    labelEl.textContent = 'Importing...';
+    labelEl.textContent = t('common_importing');
 
     // Toast feedback — content-script native (instant, no SW round-trip)
     showToastUI({
       state: 'importing',
-      text: `正在匯入「${title}」...`,
-      subtext: `Importing "${title}"...`,
+      text: t('toast_importing_video', [title]),
       progress: 50,
     });
 
@@ -202,18 +214,11 @@ function injectChannelButton(): void {
     /^\/@[^/]+/.test(location.pathname) || location.pathname.startsWith('/channel/');
   if (!isChannel) return;
 
-  // Strategy 1: New YouTube layout — yt-flexible-actions-view-model (2024+)
-  // Strategy 2: Legacy — #subscribe-button inside channel header
-  // Strategy 3: Fallback — #owner container (top-row area)
-  const targetContainer =
-    document.querySelector('yt-page-header-renderer yt-flexible-actions-view-model') ||
-    document.querySelector('yt-page-header-renderer #buttons') ||
-    document.querySelector('#channel-header-container #buttons') ||
-    document.querySelector('#owner');
-
+  // Fallback chain: 2024+ layout → legacy → last resort
+  const targetContainer = queryFirst(YT.INJECT.CHANNEL);
   if (!targetContainer) return;
 
-  const btn = createNlmButton(BUTTON_ID_CHANNEL, 'NotebookLM');
+  const btn = createNlmButton(BUTTON_ID_CHANNEL, t('btn_notebooklm'));
 
   btn.addEventListener('click', (e) => {
     e.preventDefault();
@@ -223,18 +228,17 @@ function injectChannelButton(): void {
     btn.style.backgroundColor = '#00838F';
     btn.style.color = '#fff';
     const labelEl = btn.querySelector('span:last-child') as HTMLSpanElement;
-    labelEl.textContent = 'Extracting...';
+    labelEl.textContent = t('btn_extracting');
 
     // Extract URLs directly from DOM — no round-trip needed
     const urls = extractVideoUrlsFromDom();
     if (urls.length > 0) {
-      labelEl.textContent = `Importing ${urls.length}...`;
+      labelEl.textContent = t('btn_importing_count', [urls.length.toString()]);
 
       // Toast feedback — content-script native (instant)
       showToastUI({
         state: 'importing',
-        text: `正在處理 ${urls.length} 個影片...`,
-        subtext: `Processing ${urls.length} videos...`,
+        text: t('toast_processing_videos', [urls.length.toString()]),
         progress: 10,
       });
 
@@ -243,28 +247,28 @@ function injectChannelButton(): void {
           type: 'BATCH_IMPORT',
           urls,
           pageTitle: getPageTitle(),
+          source: 'button', // distinguish from popup-triggered import
         },
         () => {
           // Reset button (toast will be updated by SW via tabs.sendMessage)
           setTimeout(() => {
             btn.style.backgroundColor = 'var(--yt-spec-badge-chip-background, #f2f2f2)';
             btn.style.color = 'var(--yt-spec-text-primary, #0f0f0f)';
-            labelEl.textContent = 'NotebookLM';
+            labelEl.textContent = t('btn_notebooklm');
           }, 3000);
         },
       );
     } else {
-      labelEl.textContent = 'No videos found';
+      labelEl.textContent = t('btn_no_videos');
       showToastUI({
         state: 'error',
-        text: '找不到影片',
-        subtext: 'No videos found on this page',
+        text: t('toast_no_videos'),
         dismissAfter: 3000,
       });
       setTimeout(() => {
         btn.style.backgroundColor = 'var(--yt-spec-badge-chip-background, #f2f2f2)';
         btn.style.color = 'var(--yt-spec-text-primary, #0f0f0f)';
-        labelEl.textContent = 'NotebookLM';
+        labelEl.textContent = t('btn_notebooklm');
       }, 2000);
     }
   });
@@ -277,18 +281,14 @@ function injectChannelButton(): void {
 // Playlist page button (next to playlist title / shuffle button)
 // ---------------------------------------------------------------------------
 function injectPlaylistButton(): void {
-  if (document.getElementById('videolm-nlm-btn-playlist')) return;
+  if (document.getElementById(BUTTON_ID_PLAYLIST)) return;
 
   if (!location.pathname.startsWith('/playlist')) return;
 
-  const headerActions =
-    document.querySelector('ytd-playlist-header-renderer .metadata-action-bar') ||
-    document.querySelector('ytd-playlist-header-renderer #top-level-buttons-computed') ||
-    document.querySelector('.immersive-header-content .metadata-action-bar');
-
+  const headerActions = queryFirst(YT.INJECT.PLAYLIST);
   if (!headerActions) return;
 
-  const btn = createNlmButton('videolm-nlm-btn-playlist', 'NotebookLM');
+  const btn = createNlmButton(BUTTON_ID_PLAYLIST, t('btn_notebooklm'));
 
   btn.addEventListener('click', (e) => {
     e.preventDefault();
@@ -299,13 +299,12 @@ function injectPlaylistButton(): void {
     const labelEl = btn.querySelector('span:last-child') as HTMLSpanElement;
     const urls = extractVideoUrlsFromDom();
     if (urls.length > 0) {
-      labelEl.textContent = `Importing ${urls.length}...`;
+      labelEl.textContent = t('btn_importing_count', [urls.length.toString()]);
 
       // Toast feedback — content-script native (instant)
       showToastUI({
         state: 'importing',
-        text: `正在處理 ${urls.length} 個影片...`,
-        subtext: `Processing ${urls.length} videos...`,
+        text: t('toast_processing_videos', [urls.length.toString()]),
         progress: 10,
       });
 
@@ -314,27 +313,27 @@ function injectPlaylistButton(): void {
           type: 'BATCH_IMPORT',
           urls,
           pageTitle: getPageTitle(),
+          source: 'button',
         },
         () => {
           setTimeout(() => {
             btn.style.backgroundColor = 'var(--yt-spec-badge-chip-background, #f2f2f2)';
             btn.style.color = 'var(--yt-spec-text-primary, #0f0f0f)';
-            labelEl.textContent = 'NotebookLM';
+            labelEl.textContent = t('btn_notebooklm');
           }, 3000);
         },
       );
     } else {
-      labelEl.textContent = 'No videos found';
+      labelEl.textContent = t('btn_no_videos');
       showToastUI({
         state: 'error',
-        text: '找不到影片',
-        subtext: 'No videos found on this page',
+        text: t('toast_no_videos'),
         dismissAfter: 3000,
       });
       setTimeout(() => {
         btn.style.backgroundColor = 'var(--yt-spec-badge-chip-background, #f2f2f2)';
         btn.style.color = 'var(--yt-spec-text-primary, #0f0f0f)';
-        labelEl.textContent = 'NotebookLM';
+        labelEl.textContent = t('btn_notebooklm');
       }, 2000);
     }
   });
@@ -343,22 +342,91 @@ function injectPlaylistButton(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Search results page button (above filter chips)
+// ---------------------------------------------------------------------------
+function injectSearchButton(): void {
+  if (document.getElementById(BUTTON_ID_SEARCH)) return;
+  if (!location.pathname.startsWith('/results')) return;
+
+  // NOTE: #filter-menu and ytd-search-filter-group-renderer only exist AFTER
+  // a filter chip is applied — do NOT use them as primary selectors.
+  const searchContainer = queryFirst<HTMLElement>(YT.INJECT.SEARCH);
+  if (!searchContainer) return;
+  // Check if first-priority selector matched (sub-menu row) for prepend strategy
+  const isSubMenu = searchContainer.matches(YT.INJECT.SEARCH[0]);
+
+  const btn = createNlmButton(BUTTON_ID_SEARCH, t('btn_notebooklm'));
+  btn.style.marginLeft = '0';
+  btn.style.marginRight = '8px';
+
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    btn.style.backgroundColor = '#00838F';
+    btn.style.color = '#fff';
+    const labelEl = btn.querySelector('span:last-child') as HTMLSpanElement;
+    labelEl.textContent = t('btn_extracting');
+
+    const urls = extractVideoUrlsFromDom();
+    if (urls.length > 0) {
+      labelEl.textContent = t('btn_importing_count', [urls.length.toString()]);
+
+      showToastUI({
+        state: 'importing',
+        text: t('toast_processing_search', [urls.length.toString()]),
+        progress: 10,
+      });
+
+      safeSendMessage(
+        {
+          type: 'BATCH_IMPORT',
+          urls,
+          pageTitle: getPageTitle(),
+          source: 'button',
+        },
+        () => {
+          setTimeout(() => {
+            btn.style.backgroundColor = 'var(--yt-spec-badge-chip-background, #f2f2f2)';
+            btn.style.color = 'var(--yt-spec-text-primary, #0f0f0f)';
+            labelEl.textContent = t('btn_notebooklm');
+          }, 3000);
+        },
+      );
+    } else {
+      labelEl.textContent = t('btn_no_videos');
+      showToastUI({
+        state: 'error',
+        text: t('toast_no_videos_scroll'),
+        dismissAfter: 4000,
+      });
+      setTimeout(() => {
+        btn.style.backgroundColor = 'var(--yt-spec-badge-chip-background, #f2f2f2)';
+        btn.style.color = 'var(--yt-spec-text-primary, #0f0f0f)';
+        labelEl.textContent = t('btn_notebooklm');
+      }, 2000);
+    }
+  });
+
+  if (isSubMenu) {
+    // Prepend into the Sort/Filter row — button appears LEFT of "篩選器"
+    searchContainer.prepend(btn);
+  } else {
+    // Fallback: insert as very first child of the primary/section container
+    searchContainer.insertAdjacentElement('afterbegin', btn);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 function getVideoTitle(): string {
-  const el =
-    document.querySelector('h1.ytd-watch-metadata yt-formatted-string') ||
-    document.querySelector('#title h1 yt-formatted-string') ||
-    document.querySelector('h1.title');
+  const el = queryFirst(YT.TITLE.VIDEO);
   return el?.textContent?.trim() || '';
 }
 
 function getChannelName(): string {
-  const el =
-    document.querySelector('ytd-channel-name yt-formatted-string#text') ||
-    document.querySelector('#channel-name yt-formatted-string') ||
-    document.querySelector('yt-page-header-renderer yt-dynamic-text-view-model span') ||
-    document.querySelector('#channel-header #channel-name');
+  const el = queryFirst(YT.TITLE.CHANNEL);
   return el?.textContent?.trim() || '';
 }
 
@@ -372,22 +440,44 @@ function extractVideoUrlsFromDom(): string[] {
   let selector = '';
 
   if (/^\/@[^/]+/.test(path) || path.startsWith('/channel/')) {
-    // Channel page
-    selector = 'ytd-rich-item-renderer a#video-title-link, ytd-grid-video-renderer a#video-title, ytd-video-renderer a#video-title, ytd-compact-video-renderer a.yt-simple-endpoint';
+    selector = YT.LINKS.CHANNEL;
   } else if (path.startsWith('/playlist')) {
-    selector = 'ytd-playlist-video-renderer a#video-title';
+    selector = YT.LINKS.PLAYLIST;
   } else if (path.startsWith('/results')) {
-    selector = 'ytd-video-renderer a#video-title';
+    selector = YT.LINKS.SEARCH;
   } else {
     return [location.href]; // Single video page
   }
 
+  const adRe = new RegExp(YT.AD.PATTERN, 'i');
   const links = document.querySelectorAll<HTMLAnchorElement>(selector);
   const seen = new Set<string>();
   const urls: string[] = [];
 
   links.forEach((a) => {
     if (!a.href) return;
+
+    // --- Ad / Promoted video filter ---
+    const renderer = a.closest(YT.AD.RENDERERS);
+    if (renderer) {
+      // Signal 1: [is-promoted] attribute — YouTube's canonical promoted video flag
+      if (renderer.hasAttribute('is-promoted')) return;
+
+      // Signal 2: ytd-search-pyv-renderer parent — search promoted video slot
+      if (a.closest(YT.AD.PROMOTED_SLOT)) return;
+
+      // Signal 3: visible ad / sponsored badge text inside the card
+      const badgeText = renderer.querySelector(YT.AD.BADGES)?.textContent?.trim() || '';
+      if (adRe.test(badgeText)) return;
+
+      // Signal 4: aria-label containing ad/sponsored wording on any child element
+      const hasAdLabel = Array.from(
+        renderer.querySelectorAll('[aria-label]'),
+      ).some((el) => adRe.test(el.getAttribute('aria-label') || ''));
+      if (hasAdLabel) return;
+    }
+    // --- End ad filter ---
+
     // Normalize: strip tracking params, keep only watch?v=ID
     try {
       const u = new URL(a.href);
@@ -418,12 +508,14 @@ function tryInjectButtons(): void {
   injectVideoButton();
   injectChannelButton();
   injectPlaylistButton();
+  injectSearchButton();
 }
 
 function removeAllButtons(): void {
   document.getElementById(BUTTON_ID_VIDEO)?.remove();
   document.getElementById(BUTTON_ID_CHANNEL)?.remove();
-  document.getElementById('videolm-nlm-btn-playlist')?.remove();
+  document.getElementById(BUTTON_ID_PLAYLIST)?.remove();
+  document.getElementById(BUTTON_ID_SEARCH)?.remove();
 }
 
 // ---------------------------------------------------------------------------
@@ -459,9 +551,14 @@ const observer = new MutationObserver(() => {
     injectChannelButton();
   } else if (
     path.startsWith('/playlist') &&
-    !document.getElementById('videolm-nlm-btn-playlist')
+    !document.getElementById(BUTTON_ID_PLAYLIST)
   ) {
     injectPlaylistButton();
+  } else if (
+    path.startsWith('/results') &&
+    !document.getElementById(BUTTON_ID_SEARCH)
+  ) {
+    injectSearchButton();
   }
 });
 
@@ -482,11 +579,17 @@ document.addEventListener('yt-page-data-updated', () => {
 tryInjectButtons();
 
 // ---------------------------------------------------------------------------
-// Heartbeat — safety net every 1s for cases where observer misses
-// This is the same pattern used by Return YouTube Dislike, SponsorBlock, etc.
-// Lightweight: just an getElementById check + inject if missing.
+// Heartbeat — safety net every 2s for cases where observer misses
+// H-2 FIX: Store interval ID + reduce frequency. Clear on extension invalidation.
 // ---------------------------------------------------------------------------
-setInterval(() => {
+const heartbeatId = setInterval(() => {
+  // H-2/H-4: Stop polling if extension context is dead
+  if (!isExtensionAlive()) {
+    clearInterval(heartbeatId);
+    observer.disconnect();
+    return;
+  }
+
   const path = location.pathname;
 
   // Detect URL change (backup for observer)
@@ -501,7 +604,10 @@ setInterval(() => {
   if ((/^\/@[^/]+/.test(path) || path.startsWith('/channel/')) && !document.getElementById(BUTTON_ID_CHANNEL)) {
     injectChannelButton();
   }
-  if (path.startsWith('/playlist') && !document.getElementById('videolm-nlm-btn-playlist')) {
+  if (path.startsWith('/playlist') && !document.getElementById(BUTTON_ID_PLAYLIST)) {
     injectPlaylistButton();
   }
-}, 1000);
+  if (path.startsWith('/results') && !document.getElementById(BUTTON_ID_SEARCH)) {
+    injectSearchButton();
+  }
+}, 2000);

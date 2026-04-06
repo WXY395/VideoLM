@@ -1,4 +1,4 @@
-import type { MessageType, VideoContent, ImportOptions, ImportMode } from '@/types';
+import type { MessageType, VideoContent, ImportOptions, ImportMode, NotionExportOptions } from '@/types';
 import { getConfig } from '@/config/dynamic-config';
 import { resolveProvider } from '@/ai/provider-manager';
 import { formatTranscript, extractVideoId, parseXMLCaptions } from '@/extractors/youtube-extractor';
@@ -16,13 +16,43 @@ import {
 } from './batch-queue';
 import { setImportStatus, getImportStatus, clearImportStatus } from './import-status';
 import { showToast, setToastTab } from './toast';
-import { listNlmNotebooks, findMatchingNotebooks, clearNotebookCache, type NlmNotebook } from './nlm-api';
+import { t } from '@/utils/i18n';
+import { listNlmNotebooks, findMatchingNotebooks, clearNotebookCache, fetchSessionTokens, type NlmNotebook } from './nlm-api';
+import { deduplicateAgainstCache, addToDedupCache, removeFromDedupCache } from './dedup-cache';
+import { YT, NLM } from '@/config/selectors';
+import { notionExport } from '@/utils/notion-sync';
+// dedup-cache is GLOBAL (not per-notebook) — always catches duplicates regardless of notebook matching
 
 // ---------------------------------------------------------------------------
 // Pre-load config on service worker startup
 // ---------------------------------------------------------------------------
 
 let configPromise = getConfig();
+
+// ---------------------------------------------------------------------------
+// C-1 FIX: Service worker keep-alive during long-running imports
+// chrome.alarms fires every ~25s to prevent MV3 SW termination (30s idle timeout).
+// ---------------------------------------------------------------------------
+const KEEPALIVE_ALARM = 'videolm-keepalive';
+
+async function startKeepAlive(): Promise<void> {
+  try {
+    await chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.4 }); // ~24s
+  } catch { /* alarms permission missing — degrade gracefully */ }
+}
+
+async function stopKeepAlive(): Promise<void> {
+  try {
+    await chrome.alarms.clear(KEEPALIVE_ALARM);
+  } catch { /* ignore */ }
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === KEEPALIVE_ALARM) {
+    // No-op — the alarm firing itself keeps the SW alive
+    console.log('[VideoLM] keepalive ping');
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -84,7 +114,7 @@ async function processAndImport(
   const quota = checkQuota(settings);
 
   if (!quota.canImport) {
-    return { success: false, items: [], error: 'Monthly import quota exceeded.' };
+    return { success: false, items: [], error: t('error_quota_exceeded') };
   }
 
   const needsAI = options.mode !== 'raw';
@@ -92,7 +122,7 @@ async function processAndImport(
     return {
       success: false,
       items: [],
-      error: 'AI processing requires a BYOK API key or VideoLM Pro.',
+      error: t('error_ai_requires_key'),
     };
   }
 
@@ -205,18 +235,19 @@ async function getNlmNotebookInfo(): Promise<{
     }
 
     // Wrap executeScript with 5s timeout to prevent hanging
+    // H-8 FIX: Removed document.body.innerText (triggers full reflow)
+    // C-5 FIX: Proper destructuring — handle empty results safely
     const execPromise = chrome.scripting.executeScript({
       target: { tabId: nlmTabs[0].id },
       world: 'MAIN' as any,
-      func: () => {
+      func: (sel: { SOURCE_CARD: string; SOURCE_ITEMS: string; YOUTUBE_LINKS: string; WARNINGS: string }) => {
         let count = 0;
-        let limit = 50; // Default free tier
+        let limit = 50;
 
         // Method 1: Read "X 個來源" or "X sources" text in sidebar header
-        const sourceHeaders = document.querySelectorAll('[class*="source"]');
+        const sourceHeaders = document.querySelectorAll(sel.SOURCE_CARD);
         for (const el of sourceHeaders) {
           const text = el.textContent || '';
-          // Match "50 個來源" or "50 sources" or "X/50"
           const countMatch = text.match(/(\d+)\s*(?:個來源|sources)/i);
           if (countMatch) { count = parseInt(countMatch[1], 10); break; }
           const slashMatch = text.match(/(\d+)\s*\/\s*(\d+)/);
@@ -229,36 +260,35 @@ async function getNlmNotebookInfo(): Promise<{
 
         // Method 2: Count actual source link elements in sidebar
         if (count === 0) {
-          const sourceItems = document.querySelectorAll(
-            'a[href*="youtube.com/watch"], a[href*="youtu.be"], [class*="source-item"], [class*="source-container"]'
-          );
+          const sourceItems = document.querySelectorAll(sel.SOURCE_ITEMS);
           count = sourceItems.length;
         }
 
-        // Method 3: Check for "已達上限" (limit reached) warning
-        const bodyText = document.body.innerText;
-        if (bodyText.includes('已達上限') || bodyText.includes('limit reached')) {
-          // If limit warning visible, notebook is full
-          // Try to read the actual count from nearby text
-          const limitMatch = bodyText.match(/(\d+)\s*\/\s*(\d+)/);
-          if (limitMatch) {
-            count = parseInt(limitMatch[1], 10);
-            limit = parseInt(limitMatch[2], 10);
-          } else {
-            count = 50; // Assume full at default limit
+        // Method 3: Check for limit warning using textContent (NOT innerText — avoids reflow)
+        const warnings = document.querySelectorAll(sel.WARNINGS);
+        for (const w of warnings) {
+          const text = w.textContent || '';
+          if (text.includes('已達上限') || text.includes('limit reached')) {
+            const limitMatch = text.match(/(\d+)\s*\/\s*(\d+)/);
+            if (limitMatch) {
+              count = parseInt(limitMatch[1], 10);
+              limit = parseInt(limitMatch[2], 10);
+            } else {
+              count = 50;
+            }
+            break;
           }
         }
 
         // Collect existing YouTube URLs for deduplication
         const existingUrls: string[] = [];
-        const allLinks = document.querySelectorAll('a[href*="youtube.com/watch"], a[href*="youtu.be"]');
+        const allLinks = document.querySelectorAll(sel.YOUTUBE_LINKS);
         allLinks.forEach(a => {
           const href = a.getAttribute('href');
           if (href) existingUrls.push(href);
         });
 
-        // Also check source text content for YouTube URLs
-        const sourceElements = document.querySelectorAll('[class*="source"]');
+        const sourceElements = document.querySelectorAll(sel.SOURCE_CARD);
         sourceElements.forEach(el => {
           const text = el.textContent || '';
           const urlMatch = text.match(/youtube\.com\/watch\?v=[\w-]+/g);
@@ -267,15 +297,18 @@ async function getNlmNotebookInfo(): Promise<{
 
         return { count, limit, existingUrls };
       },
-      args: [],
+      args: [NLM],
     });
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error('getNlmNotebookInfo timeout')), 5000),
     );
-    const [result] = await Promise.race([execPromise, timeoutPromise]);
+    const results = await Promise.race([execPromise, timeoutPromise]);
+    const result = Array.isArray(results) && results.length > 0 ? results[0] : null;
 
     return (result?.result as any) || { count: 0, limit: 50, existingUrls: [] };
-  } catch {
+  } catch (e) {
+    // L-2 FIX: Log so dedup failure is visible in dev console
+    console.log('[VideoLM] getNlmNotebookInfo error (dedup disabled for this import):', e);
     return { count: 0, limit: 50, existingUrls: [] };
   }
 }
@@ -367,7 +400,13 @@ async function filterValidYouTubeUrls(urls: string[]): Promise<{ valid: string[]
  * using session credentials from the NLM page. Zero UI interference,
  * no "已達上限" warnings, ~500ms per source.
  */
-async function importUrlsToNlm(urls: string[], targetNotebookId?: string, targetAuthuser?: string, autoCreateTitle?: string): Promise<{
+async function importUrlsToNlm(
+  urls: string[],
+  targetNotebookId?: string,
+  targetAuthuser?: string,
+  autoCreateTitle?: string,
+  onProgress?: (progress: number, phase: string) => void,
+): Promise<{
   success: boolean;
   error?: string;
   urlCount: number;
@@ -379,7 +418,7 @@ async function importUrlsToNlm(urls: string[], targetNotebookId?: string, target
   const urlCount = urls.length;
 
   if (urls.length === 0 || urls.every(u => !u)) {
-    return { success: false, error: 'No URLs provided.', urlCount: 0 };
+    return { success: false, error: t('error_no_urls'), urlCount: 0 };
   }
 
   // Determine notebook ID: either passed directly or from open NLM tab
@@ -409,15 +448,20 @@ async function importUrlsToNlm(urls: string[], targetNotebookId?: string, target
     if (newId) {
       notebookId = newId;
       console.log(`[VideoLM] Auto-created notebook: ${newId}`);
-      // Wait for NLM to register the notebook
-      await new Promise(r => setTimeout(r, 3000));
+      // M-9 FIX: Poll for notebook readiness instead of hardcoded sleep
+      for (let i = 0; i < 5; i++) {
+        await new Promise(r => setTimeout(r, 1000));
+        clearNotebookCache();
+        const freshList = await listNlmNotebooks(authuser);
+        if (freshList.some(nb => nb.id === newId)) break;
+      }
     } else {
-      return { success: false, urlCount, error: 'Could not auto-create notebook. Please open NotebookLM and try again.' };
+      return { success: false, urlCount, error: t('error_cannot_autocreate') };
     }
   }
 
   if (!notebookId) {
-    return { success: false, urlCount, error: 'No notebook found. Please open NotebookLM or try again.' };
+    return { success: false, urlCount, error: t('error_no_notebook') };
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -426,36 +470,15 @@ async function importUrlsToNlm(urls: string[], targetNotebookId?: string, target
   // directly from the service worker. No executeScript needed!
   // ═══════════════════════════════════════════════════════════════
 
-  // Get authuser — may have been set from NLM tab URL above, or passed as targetAuthuser
-  const authuserParam = authuser ? `?authuser=${authuser}&pageId=none` : '';
   console.log(`[VideoLM] importUrlsToNlm: notebookId=${notebookId}, authuser=${authuser}, urls=${urls.length}`);
 
-  // Step 1: Fetch NLM homepage to get fresh session tokens (bl, at)
-  let bl = '';
-  let atToken = '';
-
-  try {
-    const homepageResp = await fetch(
-      `https://notebooklm.google.com/${authuserParam}`,
-      { redirect: 'error' }
-    );
-    if (!homepageResp.ok) {
-      return { success: false, urlCount, error: 'Cannot connect to NotebookLM. Please check your login.' };
-    }
-    const html = await homepageResp.text();
-
-    // Extract tokens from HTML (same regex as competitor)
-    const blMatch = html.match(/"cfb2h":"([^"]+)"/);
-    const atMatch = html.match(/"SNlM0e":"([^"]+)"/);
-    bl = blMatch ? blMatch[1] : '';
-    atToken = atMatch ? atMatch[1] : '';
-  } catch (e) {
-    return { success: false, urlCount, error: 'Cannot reach NotebookLM. Please check your login.' };
+  // Step 1: Fetch session tokens via shared helper (C-3 FIX: single source of truth)
+  onProgress?.(20, t('toast_connecting'));
+  const tokens = await fetchSessionTokens(authuser);
+  if (!tokens) {
+    return { success: false, urlCount, error: t('error_cannot_connect') };
   }
-
-  if (!bl || !atToken) {
-    return { success: false, urlCount, error: 'Cannot read NLM session tokens. Please refresh NotebookLM.' };
-  }
+  const { bl, atToken } = tokens;
 
   // Step 2: Build sources array — ALL URLs in one API call (like competitor)
   const validUrls = urls.filter(Boolean);
@@ -465,6 +488,7 @@ async function importUrlsToNlm(urls: string[], targetNotebookId?: string, target
       : [null, null, [url]]                                  // Website URL
   );
 
+  onProgress?.(55, t('toast_submitting', [validUrls.length.toString()]));
   console.log(`[VideoLM] Sending ${validUrls.length} URLs to notebook ${notebookId} via batchexecute`);
 
   try {
@@ -502,6 +526,7 @@ async function importUrlsToNlm(urls: string[], targetNotebookId?: string, target
 
     if (resp.ok) {
       totalSuccess = validUrls.length;
+      onProgress?.(90, t('toast_nlm_processing'));
       console.log(`[VideoLM] batchexecute success — ${totalSuccess} sources submitted`);
     } else {
       lastError = `batchexecute returned ${resp.status}`;
@@ -523,16 +548,18 @@ async function importUrlsToNlm(urls: string[], targetNotebookId?: string, target
 
   if (totalSuccess > 0) {
     await incrementUsage('imports', totalSuccess);
+    // Record in global dedup cache so future imports skip these videos
+    await addToDedupCache(validUrls);
     const failCount = validUrls.length - totalSuccess;
     let msg = totalSuccess === 1
-      ? 'YouTube video added to your NotebookLM notebook!'
-      : `Added ${totalSuccess} videos to your NotebookLM notebook!`;
+      ? t('msg_single_added')
+      : t('msg_multi_added', [totalSuccess.toString()]);
     if (failCount > 0) msg += ` (${failCount} failed)`;
     return { success: true, message: msg, urlCount: totalSuccess, notebookId, authuser };
   } else {
     return {
       success: false, clipboardText: urls.join('\n'), urlCount,
-      error: lastError || 'API import failed.', notebookId, authuser,
+      error: lastError || t('error_api_failed'), notebookId, authuser,
     };
   }
 }
@@ -546,22 +573,11 @@ async function importUrlsToNlm(urls: string[], targetNotebookId?: string, target
  * Returns the new notebook ID, or null on failure.
  */
 async function createNlmNotebook(title: string, authuser = ''): Promise<string | null> {
-  // Direct fetch from service worker — same pattern as importUrlsToNlm
-  // No executeScript needed!
+  // C-3 FIX: Use shared fetchSessionTokens helper
   try {
-    const authuserParam = authuser ? `?authuser=${authuser}&pageId=none` : '';
-
-    // Get fresh session tokens
-    const homepageResp = await fetch(
-      `https://notebooklm.google.com/${authuserParam}`,
-      { redirect: 'error' }
-    );
-    if (!homepageResp.ok) return null;
-
-    const html = await homepageResp.text();
-    const bl = html.match(/"cfb2h":"([^"]+)"/)?.[1] || '';
-    const atToken = html.match(/"SNlM0e":"([^"]+)"/)?.[1] || '';
-    if (!bl || !atToken) return null;
+    const tokens = await fetchSessionTokens(authuser);
+    if (!tokens) return null;
+    const { bl, atToken } = tokens;
 
     // CCqFvf = Create notebook RPC (same as competitor)
     const rpcId = 'CCqFvf';
@@ -588,8 +604,25 @@ async function createNlmNotebook(title: string, authuser = ''): Promise<string |
     }
 
     const text = await resp.text();
-    const uuidMatch = text.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/);
-    const nbId = uuidMatch ? uuidMatch[1] : null;
+    // H-7 FIX: Parse batchexecute response structure to find the notebook UUID
+    // in the CCqFvf response data — not just any UUID in the response body.
+    let nbId: string | null = null;
+    try {
+      const lines = text.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('[') && trimmed.includes('CCqFvf')) {
+          // Found the CCqFvf response line — extract UUID from it
+          const uuidMatch = trimmed.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/);
+          if (uuidMatch) { nbId = uuidMatch[1]; break; }
+        }
+      }
+    } catch { /* ignore parse errors */ }
+    // Fallback: scan entire body (less precise but compatible)
+    if (!nbId) {
+      const uuidMatch = text.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/);
+      nbId = uuidMatch ? uuidMatch[1] : null;
+    }
     console.log(`[VideoLM] Created notebook "${title}" → ${nbId}`);
     return nbId;
   } catch (e) {
@@ -608,21 +641,21 @@ async function postImportActions(
   totalImported: number,
   pageTitle: string,
 ): Promise<void> {
-  // Refresh or open NLM tab so user sees the new sources
+  // H-10 FIX: Only open/navigate NLM tab — never force-reload an existing one.
+  // Force-reloading can destroy user's in-progress editing.
   try {
     const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
     if (nlmTabs[0]?.id) {
-      // NLM tab exists — navigate it to the notebook (or reload if already there)
+      // NLM tab exists — only navigate if it's on a different notebook
       const currentUrl = nlmTabs[0].url || '';
-      if (currentUrl.includes(`/notebook/${notebookId}`)) {
-        await chrome.tabs.reload(nlmTabs[0].id);
-      } else {
+      if (!currentUrl.includes(`/notebook/${notebookId}`)) {
         const qs = authuser ? `?authuser=${authuser}` : '';
         await chrome.tabs.update(nlmTabs[0].id, {
           url: `https://notebooklm.google.com/notebook/${notebookId}${qs}`,
         });
       }
-      console.log('[VideoLM] Refreshed/navigated NLM tab');
+      // If already on the correct notebook, do NOT reload — user may be editing
+      console.log('[VideoLM] NLM tab ready (no forced reload)');
     } else if (notebookId) {
       // No NLM tab open (auto-create case) — open a new tab
       const qs = authuser ? `?authuser=${authuser}` : '';
@@ -640,11 +673,8 @@ async function postImportActions(
   await showToast({
     state: 'success',
     text: totalImported === 1
-      ? `"${pageTitle}" 已匯入！`
-      : `已匯入 ${totalImported} 個影片 — "${pageTitle}"`,
-    subtext: totalImported === 1
-      ? `"${pageTitle}" imported!`
-      : `${totalImported} videos from "${pageTitle}" imported!`,
+      ? t('toast_single_imported', [pageTitle])
+      : t('toast_multi_imported', [totalImported.toString(), pageTitle]),
     viewUrl: nbUrl,
     dismissAfter: 8000,
   });
@@ -652,13 +682,14 @@ async function postImportActions(
   // Also show system notification as backup (may be blocked by OS)
   try {
     // Use 48px icon — MV3 service workers sometimes fail to load larger icons
-    chrome.notifications.create('videolm-import-done', {
+    // M-11 FIX: Unique notification ID so concurrent imports don't overwrite
+    chrome.notifications.create(`videolm-import-${Date.now()}`, {
       type: 'basic',
       iconUrl: chrome.runtime.getURL('icons/icon48.png'),
-      title: 'VideoLM Import Complete',
+      title: t('notif_import_complete'),
       message: totalImported === 1
-        ? `"${pageTitle}" imported!`
-        : `${totalImported} videos from "${pageTitle}" imported!`,
+        ? t('toast_single_imported', [pageTitle])
+        : t('toast_multi_imported', [totalImported.toString(), pageTitle]),
       silent: false,
     }, () => {
       // Suppress "Unable to download images" error in callback
@@ -686,6 +717,23 @@ async function runAutoSplitImport(
   authuser = '',
   targetNotebookId = '',
 ): Promise<void> {
+  // C-1 FIX: Keep service worker alive during long batch imports
+  await startKeepAlive();
+  try {
+    await _runAutoSplitImportInner(urls, pageTitle, existingCount, limit, authuser, targetNotebookId);
+  } finally {
+    await stopKeepAlive();
+  }
+}
+
+async function _runAutoSplitImportInner(
+  urls: string[],
+  pageTitle: string,
+  existingCount: number,
+  limit: number,
+  authuser: string,
+  targetNotebookId: string,
+): Promise<void> {
   const availableSlots = Math.max(0, limit - existingCount);
   const firstBatch = urls.slice(0, availableSlots);
   const remaining = urls.slice(availableSlots);
@@ -706,8 +754,7 @@ async function runAutoSplitImport(
     });
     await showToast({
       state: 'importing',
-      text: `正在匯入 ${firstBatch.length} 個影片...`,
-      subtext: `Importing ${firstBatch.length} videos from "${pageTitle}"...`,
+      text: t('toast_importing_count', [firstBatch.length.toString()]),
       progress: 0,
     });
 
@@ -716,6 +763,9 @@ async function runAutoSplitImport(
       targetNotebookId || undefined,
       targetNotebookId ? authuser : undefined,
       targetNotebookId ? undefined : pageTitle,  // Only auto-create if no target
+      async (pct, phase) => {
+        await showToast({ state: 'importing', text: phase, progress: pct });
+      },
     );
     totalImported = firstResult.success ? firstBatch.length : 0;
     firstResultNbId = firstResult.notebookId || '';
@@ -729,8 +779,7 @@ async function runAutoSplitImport(
       });
       await showToast({
         state: 'error',
-        text: `匯入失敗：${firstResult.error || '未知錯誤'}`,
-        subtext: `Import failed: ${firstResult.error || 'Unknown error'}`,
+        text: t('toast_import_failed', [firstResult.error || '']),
       });
       return;
     }
@@ -753,9 +802,10 @@ async function runAutoSplitImport(
     const partTitle = `${pageTitle} - Part ${partNumber}`;
 
     // Check if a "Part N" notebook already exists — reuse it instead of creating duplicate
+    // H-9 FIX: Only clear cache once per chunk, not redundantly
     let targetNbId = '';
     let partExistingCount = 0;
-    clearNotebookCache();  // Force fresh lookup after previous import/creation
+    clearNotebookCache();
     const allNotebooks = await listNlmNotebooks(authuser);
     const existingPart = allNotebooks.find(
       (nb) => nb.name.trim().toLowerCase() === partTitle.trim().toLowerCase(),
@@ -785,12 +835,16 @@ async function runAutoSplitImport(
       });
       await showToast({
         state: 'importing',
-        text: `正在合併至 Part ${partNumber}... (${totalImported}/${urls.length})`,
-        subtext: `Merging into Part ${partNumber}... (${totalImported}/${urls.length})`,
+        text: t('toast_merging_part', [partNumber.toString(), totalImported.toString(), urls.length.toString()]),
         progress: pct,
       });
 
-      const chunkResult = await importUrlsToNlm(chunk, targetNbId, authuser);
+      const chunkResult = await importUrlsToNlm(
+        chunk, targetNbId, authuser, undefined,
+        async (pct, phase) => {
+          await showToast({ state: 'importing', text: phase, progress: pct });
+        },
+      );
       if (chunkResult.success) {
         totalImported += chunk.length;
         lastImportedNbId = targetNbId;
@@ -811,8 +865,7 @@ async function runAutoSplitImport(
     });
     await showToast({
       state: 'importing',
-      text: `正在建立 Part ${partNumber}... (${totalImported}/${urls.length})`,
-      subtext: `Creating Part ${partNumber}... (${totalImported}/${urls.length})`,
+      text: t('toast_creating_part', [partNumber.toString(), totalImported.toString(), urls.length.toString()]),
       progress: pct,
     });
 
@@ -832,8 +885,16 @@ async function runAutoSplitImport(
       return;
     }
 
-    console.log(`[VideoLM] Waiting 3s for notebook ${newNbId} to be ready...`);
-    await new Promise(r => setTimeout(r, 3000));
+    // M-9 FIX: Poll for notebook readiness instead of hardcoded sleep
+    console.log(`[VideoLM] Waiting for notebook ${newNbId} to be ready...`);
+    let nbReady = false;
+    for (let i = 0; i < 6; i++) { // 6 × 1s = 6s max wait
+      await new Promise(r => setTimeout(r, 1000));
+      clearNotebookCache();
+      const freshList = await listNlmNotebooks(authuser);
+      if (freshList.some(nb => nb.id === newNbId)) { nbReady = true; break; }
+    }
+    if (!nbReady) console.log(`[VideoLM] Notebook ${newNbId} may not be ready — proceeding anyway`);
 
     await setImportStatus({
       active: true, pageTitle, totalUrls: urls.length,
@@ -843,12 +904,16 @@ async function runAutoSplitImport(
     });
     await showToast({
       state: 'importing',
-      text: `正在匯入至 Part ${partNumber}... (${totalImported}/${urls.length})`,
-      subtext: `Importing to Part ${partNumber}... (${totalImported}/${urls.length})`,
+      text: t('toast_importing_to_part', [partNumber.toString(), totalImported.toString(), urls.length.toString()]),
       progress: Math.round((totalImported / urls.length) * 100),
     });
 
-    const chunkResult = await importUrlsToNlm(chunk, newNbId, authuser);
+    const chunkResult = await importUrlsToNlm(
+      chunk, newNbId, authuser, undefined,
+      async (pct, phase) => {
+        await showToast({ state: 'importing', text: phase, progress: pct });
+      },
+    );
     if (chunkResult.success) {
       totalImported += chunk.length;
       lastImportedNbId = newNbId;
@@ -906,11 +971,11 @@ chrome.runtime.onMessage.addListener(
             const [prResult] = await chrome.scripting.executeScript({
               target: { tabId: tab.id },
               world: 'MAIN' as any,
-              func: (expectedId: string) => {
+              func: (expectedId: string, playerSel: string) => {
                 // Try player API first (always current after SPA nav)
                 let pr: any = null;
                 try {
-                  const player = document.querySelector('#movie_player') as any;
+                  const player = document.querySelector(playerSel) as any;
                   if (player?.getPlayerResponse) pr = player.getPlayerResponse();
                 } catch {}
                 // Fallback to global variable
@@ -950,7 +1015,7 @@ chrome.runtime.onMessage.addListener(
                   })(),
                 };
               },
-              args: [expectedVideoId || ''],
+              args: [expectedVideoId || '', YT.PLAYER],
             });
 
             let prData = prResult?.result;
@@ -961,10 +1026,10 @@ chrome.runtime.onMessage.addListener(
               const [retry] = await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 world: 'MAIN' as any,
-                func: () => {
+                func: (playerSel: string) => {
                   let pr: any = null;
                   try {
-                    const player = document.querySelector('#movie_player') as any;
+                    const player = document.querySelector(playerSel) as any;
                     if (player?.getPlayerResponse) pr = player.getPlayerResponse();
                   } catch {}
                   if (!pr) pr = (window as any).ytInitialPlayerResponse;
@@ -991,13 +1056,13 @@ chrome.runtime.onMessage.addListener(
                     } catch { return []; } })(),
                   };
                 },
-                args: [],
+                args: [YT.PLAYER],
               });
               prData = retry?.result;
             }
 
             if (!prData) {
-              sendResponse({ type: 'VIDEO_CONTENT', data: null, error: 'Could not read video data. Try refreshing.' });
+              sendResponse({ type: 'VIDEO_CONTENT', data: null, error: t('error_cannot_read_video') });
               return;
             }
 
@@ -1018,103 +1083,110 @@ chrome.runtime.onMessage.addListener(
             }
 
             // Step 3: If Tier 1 failed, try Tier 2 — DOM scraping in MAIN world
+            // C-4 FIX: chrome.scripting.executeScript does NOT await async funcs.
+            // Split into two sync calls: (1) click transcript button, (2) read segments.
             if (segments.length === 0 && prData.captionTracks.length > 0) {
-              const [domResult] = await chrome.scripting.executeScript({
+              // Step 3a: Click transcript button (sync — no awaits needed)
+              const [clickResult] = await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 world: 'MAIN' as any,
-                func: async () => {
+                func: (tSel: {
+                  PANEL_EXPANDED: readonly string[];
+                  OPEN_BUTTONS: string;
+                  DESCRIPTION_EXPAND: string;
+                  DESCRIPTION_COLLAPSE: string;
+                  BUTTON_LABELS: readonly string[];
+                }) => {
+                  const qf = (ss: readonly string[]) => { for (const s of ss) { const e = document.querySelector(s); if (e) return e; } return null; };
                   // Close any stale transcript panel first
-                  const existingPanel = document.querySelector(
-                    'ytd-engagement-panel-section-list-renderer[target-id="PAmodern_transcript_view"][visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"],' +
-                    'ytd-engagement-panel-section-list-renderer[target-id*="transcript"][visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]'
-                  );
+                  const existingPanel = qf(tSel.PANEL_EXPANDED);
                   if (existingPanel) {
                     const cb = existingPanel.querySelector('#header button') as HTMLElement;
-                    if (cb) { cb.click(); await new Promise(r => setTimeout(r, 500)); }
+                    if (cb) cb.click();
                   }
-
                   // Expand description
-                  const expand = document.querySelector('#expand') as HTMLElement;
-                  if (expand) { expand.click(); await new Promise(r => setTimeout(r, 500)); }
-
+                  const expand = document.querySelector(tSel.DESCRIPTION_EXPAND) as HTMLElement;
+                  if (expand) expand.click();
                   // Click transcript button
-                  const labels = ['轉錄稿','转录稿','字幕記錄','字幕记录','transcript','Transcript','文字起こし'];
-                  let clicked = false;
-                  const btns = document.querySelectorAll('#description button, ytd-video-description-transcript-section-renderer button');
+                  const btns = document.querySelectorAll(tSel.OPEN_BUTTONS);
                   for (const btn of btns) {
                     const t = btn.textContent?.trim() || '';
-                    if (labels.some(l => t.includes(l))) { (btn as HTMLElement).click(); clicked = true; break; }
+                    if (tSel.BUTTON_LABELS.some(l => t.includes(l))) {
+                      (btn as HTMLElement).click();
+                      return true; // clicked
+                    }
                   }
-                  if (!clicked) {
-                    const col = document.querySelector('#collapse') as HTMLElement;
-                    if (col) col.click();
-                    return [];
-                  }
-
-                  // Wait for segments to stabilize
-                  const SELS = ['transcript-segment-view-model', 'ytd-transcript-segment-renderer'];
-                  let lastCount = 0, stableAt = 0;
-                  for (let i = 0; i < 20; i++) {
-                    await new Promise(r => setTimeout(r, 400));
-                    let count = 0;
-                    for (const s of SELS) count += document.querySelectorAll(s).length;
-                    if (count > 0 && count === lastCount) {
-                      if (!stableAt) stableAt = Date.now();
-                      else if (Date.now() - stableAt > 500) break;
-                    } else { lastCount = count; stableAt = 0; }
-                  }
-
-                  // Read segments — modern format
-                  const modern = document.querySelectorAll('transcript-segment-view-model');
-                  if (modern.length > 0) {
-                    const segs = [...modern].map(el => {
-                      const ts = (el.querySelector('.ytwTranscriptSegmentViewModelTimestamp') as HTMLElement)?.textContent?.trim() || '';
-                      const tx = (el.querySelector('span.yt-core-attributed-string') as HTMLElement)?.textContent?.trim() || '';
-                      const parts = ts.split(':').map(Number);
-                      let start = 0;
-                      if (parts.length === 3) start = parts[0]*3600 + parts[1]*60 + parts[2];
-                      else if (parts.length === 2) start = parts[0]*60 + parts[1];
-                      return tx ? { text: tx, start, duration: 0 } : null;
-                    }).filter(Boolean);
-
-                    // Close panel + collapse description
-                    const cp = document.querySelector('ytd-engagement-panel-section-list-renderer[target-id="PAmodern_transcript_view"] #header button') as HTMLElement;
-                    if (cp) cp.click();
-                    await new Promise(r => setTimeout(r, 100));
-                    const col = document.querySelector('#collapse') as HTMLElement;
-                    if (col) col.click();
-
-                    return segs;
-                  }
-
-                  // Read segments — legacy format
-                  const legacy = document.querySelectorAll('ytd-transcript-segment-renderer');
-                  if (legacy.length > 0) {
-                    const segs = [...legacy].map(el => {
-                      const ts = (el.querySelector('.segment-timestamp') as HTMLElement)?.textContent?.trim() || '';
-                      const tx = (el.querySelector('.segment-text') as HTMLElement)?.textContent?.trim() || '';
-                      const parts = ts.split(':').map(Number);
-                      let start = 0;
-                      if (parts.length === 3) start = parts[0]*3600 + parts[1]*60 + parts[2];
-                      else if (parts.length === 2) start = parts[0]*60 + parts[1];
-                      return tx ? { text: tx, start, duration: 0 } : null;
-                    }).filter(Boolean);
-
-                    const cp = document.querySelector('ytd-engagement-panel-section-list-renderer[target-id*="transcript"] #header button') as HTMLElement;
-                    if (cp) cp.click();
-                    await new Promise(r => setTimeout(r, 100));
-                    const col = document.querySelector('#collapse') as HTMLElement;
-                    if (col) col.click();
-
-                    return segs;
-                  }
-
-                  return [];
+                  // Collapse description if no transcript button found
+                  const col = document.querySelector(tSel.DESCRIPTION_COLLAPSE) as HTMLElement;
+                  if (col) col.click();
+                  return false; // not clicked
                 },
-                args: [],
+                args: [YT.TRANSCRIPT],
               });
 
-              segments = (domResult?.result as any[]) || [];
+              const transcriptClicked = clickResult?.result === true;
+
+              if (transcriptClicked) {
+                // Wait for transcript panel to load (service worker sleep — no executeScript needed)
+                await new Promise(r => setTimeout(r, 4000));
+
+                // Step 3b: Read segments (sync — just reads DOM)
+                const [domResult] = await chrome.scripting.executeScript({
+                  target: { tabId: tab.id },
+                  world: 'MAIN' as any,
+                  func: (tSel: {
+                    SEGMENT_MODERN: string; SEGMENT_MODERN_TIMESTAMP: string; SEGMENT_MODERN_TEXT: string;
+                    SEGMENT_LEGACY: string; SEGMENT_LEGACY_TIMESTAMP: string; SEGMENT_LEGACY_TEXT: string;
+                  }) => {
+                    // Read segments — modern format
+                    const modern = document.querySelectorAll(tSel.SEGMENT_MODERN);
+                    if (modern.length > 0) {
+                      const segs = [...modern].map(el => {
+                        const ts = (el.querySelector(tSel.SEGMENT_MODERN_TIMESTAMP) as HTMLElement)?.textContent?.trim() || '';
+                        const tx = (el.querySelector(tSel.SEGMENT_MODERN_TEXT) as HTMLElement)?.textContent?.trim() || '';
+                        const parts = ts.split(':').map(Number);
+                        let start = 0;
+                        if (parts.length === 3) start = parts[0]*3600 + parts[1]*60 + parts[2];
+                        else if (parts.length === 2) start = parts[0]*60 + parts[1];
+                        return tx ? { text: tx, start, duration: 0 } : null;
+                      }).filter(Boolean);
+                      return segs;
+                    }
+                    // Read segments — legacy format
+                    const legacy = document.querySelectorAll(tSel.SEGMENT_LEGACY);
+                    if (legacy.length > 0) {
+                      const segs = [...legacy].map(el => {
+                        const ts = (el.querySelector(tSel.SEGMENT_LEGACY_TIMESTAMP) as HTMLElement)?.textContent?.trim() || '';
+                        const tx = (el.querySelector(tSel.SEGMENT_LEGACY_TEXT) as HTMLElement)?.textContent?.trim() || '';
+                        const parts = ts.split(':').map(Number);
+                        let start = 0;
+                        if (parts.length === 3) start = parts[0]*3600 + parts[1]*60 + parts[2];
+                        else if (parts.length === 2) start = parts[0]*60 + parts[1];
+                        return tx ? { text: tx, start, duration: 0 } : null;
+                      }).filter(Boolean);
+                      return segs;
+                    }
+                    return [];
+                  },
+                  args: [YT.TRANSCRIPT],
+                });
+
+                segments = (domResult?.result as any[]) || [];
+
+                // Step 3c: Close transcript panel (sync cleanup)
+                await chrome.scripting.executeScript({
+                  target: { tabId: tab.id },
+                  world: 'MAIN' as any,
+                  func: (tSel: { PANEL_CLOSE: readonly string[]; DESCRIPTION_COLLAPSE: string }) => {
+                    const qf = (ss: readonly string[]) => { for (const s of ss) { const e = document.querySelector(s); if (e) return e; } return null; };
+                    const cp = qf(tSel.PANEL_CLOSE) as HTMLElement;
+                    if (cp) cp.click();
+                    const col = document.querySelector(tSel.DESCRIPTION_COLLAPSE) as HTMLElement;
+                    if (col) col.click();
+                  },
+                  args: [YT.TRANSCRIPT],
+                }).catch(() => { /* ignore cleanup errors */ });
+              }
             }
 
             // Step 4: Build VideoContent
@@ -1212,8 +1284,7 @@ chrome.runtime.onMessage.addListener(
 
             await showToast({
               state: 'importing',
-              text: `正在匯入「${videoTitle || '影片'}」...`,
-              subtext: `Importing "${videoTitle || 'video'}"...`,
+              text: t('toast_importing_video', [videoTitle || '']),
               progress: 50,
             });
 
@@ -1233,23 +1304,48 @@ chrome.runtime.onMessage.addListener(
               }
             }
 
+            // Global dedup cache — catches duplicates regardless of notebook
+            {
+              const cacheCheck = await deduplicateAgainstCache(urls.filter(Boolean));
+              if (cacheCheck.uniqueUrls.length === 0) {
+                sendResponse({ success: true, message: `"${videoTitle || 'video'}" already imported` });
+                await showToast({
+                  state: 'success',
+                  text: t('toast_video_already_imported'),
+                  subtext: t('toast_already_imported_detail', [videoTitle || '']),
+                  dismissAfter: 8000,
+                  actionLabel: t('toast_reimport_btn'),
+                  actionMessage: {
+                    type: 'FORCE_REIMPORT',
+                    urls: urls.filter(Boolean),
+                    videoTitle: videoTitle || '',
+                  },
+                });
+                return;
+              }
+            }
+
+            // C-2 FIX: Send response immediately so popup doesn't freeze
+            sendResponse({ success: true, importing: true, message: `Importing "${videoTitle || 'video'}"...` });
+
             const result = await importUrlsToNlm(
               urls.filter(Boolean),
               targetNbId,
               targetAuth,
               targetNbId ? undefined : videoTitle,
+              async (pct, phase) => {
+                await showToast({ state: 'importing', text: phase, progress: pct });
+              },
             );
-            sendResponse(result);
 
             // Post-import: refresh NLM tab + toast + notification
             if (result.success && result.notebookId) {
               await postImportActions(result.notebookId, result.authuser || '', urls.length, videoTitle || 'Video');
             } else if (!result.success) {
-              await showToast({ state: 'error', text: `匯入失敗`, subtext: result.error || 'Import failed' });
+              await showToast({ state: 'error', text: t('toast_import_failed', [result.error || '']) });
             }
           } catch (err) {
-            sendResponse({ success: false, urlCount: 0, error: String(err) });
-            await showToast({ state: 'error', text: `匯入失敗`, subtext: String(err) });
+            await showToast({ state: 'error', text: t('toast_import_failed', [String(err)]) });
           }
         })();
         return true;
@@ -1272,7 +1368,12 @@ chrome.runtime.onMessage.addListener(
             const [result] = await chrome.scripting.executeScript({
               target: { tabId: tab.id },
               world: 'MAIN' as any,
-              func: (currentUrl: string) => {
+              func: (
+                currentUrl: string,
+                linkSel: { CHANNEL: string; PLAYLIST: string; SEARCH: string },
+                adSel: { RENDERERS: string; PROMOTED_SLOT: string; BADGES: string; PATTERN: string },
+                titleSel: { PLAYLIST_HEADER: string; CHANNEL_HEADER: string },
+              ) => {
                 // ---------- Detect page type ----------
                 type PageType = 'watch' | 'playlist' | 'channel' | 'search';
                 let pageType: PageType = 'watch';
@@ -1299,40 +1400,37 @@ chrome.runtime.onMessage.addListener(
                 // ---------- Collect hrefs from the DOM ----------
                 let selector = '';
                 switch (pageType) {
-                  case 'playlist':
-                    selector = 'ytd-playlist-video-renderer a#video-title';
-                    break;
-                  case 'channel':
-                    // Channel pages: /videos, /featured, /streams, homepage
-                    // Multiple renderers depending on the sub-page layout
-                    selector = 'ytd-rich-item-renderer a#video-title-link, ytd-grid-video-renderer a#video-title, ytd-video-renderer a#video-title, ytd-compact-video-renderer a.yt-simple-endpoint';
-                    break;
-                  case 'search':
-                    selector = 'ytd-video-renderer a#video-title';
-                    break;
+                  case 'playlist': selector = linkSel.PLAYLIST; break;
+                  case 'channel':  selector = linkSel.CHANNEL;  break;
+                  case 'search':   selector = linkSel.SEARCH;   break;
                 }
 
+                const adRe = new RegExp(adSel.PATTERN, 'i');
                 const links = document.querySelectorAll<HTMLAnchorElement>(selector);
                 const rawUrls: string[] = [];
                 links.forEach((a) => {
-                  const href = a.href;
-                  if (href) rawUrls.push(href);
+                  if (!a.href) return;
+                  // Ad filtering — selectors from centralized config
+                  const renderer = a.closest(adSel.RENDERERS);
+                  if (renderer) {
+                    if (renderer.hasAttribute('is-promoted')) return;
+                    if (a.closest(adSel.PROMOTED_SLOT)) return;
+                    const badgeText = renderer.querySelector(adSel.BADGES)?.textContent?.trim() || '';
+                    if (adRe.test(badgeText)) return;
+                  }
+                  rawUrls.push(a.href);
                 });
 
                 // ---------- Page title ----------
                 let pageTitle = '';
                 switch (pageType) {
                   case 'playlist': {
-                    const titleEl = document.querySelector(
-                      'yt-formatted-string.ytd-playlist-header-renderer, h1 yt-formatted-string',
-                    );
+                    const titleEl = document.querySelector(titleSel.PLAYLIST_HEADER);
                     pageTitle = titleEl?.textContent?.trim() || '';
                     break;
                   }
                   case 'channel': {
-                    const nameEl = document.querySelector(
-                      'ytd-channel-name yt-formatted-string, #channel-name yt-formatted-string',
-                    );
+                    const nameEl = document.querySelector(titleSel.CHANNEL_HEADER);
                     pageTitle = nameEl?.textContent?.trim() || '';
                     break;
                   }
@@ -1356,7 +1454,7 @@ chrome.runtime.onMessage.addListener(
                   totalVisible: rawUrls.length,
                 };
               },
-              args: [tabUrl],
+              args: [tabUrl, YT.LINKS, YT.AD, YT.TITLE],
             });
 
             const extraction = result?.result as {
@@ -1409,38 +1507,46 @@ chrome.runtime.onMessage.addListener(
             const [ytTab] = await chrome.tabs.query({ active: true, currentWindow: true });
             if (ytTab?.id) setToastTab(ytTab.id);
 
-            const { urls: rawUrls, pageTitle: rawPageTitle } = message as any;
+            const { urls: rawUrls, pageTitle: rawPageTitle, source: importSource } = message as any;
+            // 'button' = triggered from page button (no popup UI available)
+            // 'popup'  = triggered from extension popup (can show NotebookChoice UI)
             // Fallback: if content script didn't extract a title, use a generic one
             const pageTitle = rawPageTitle || `YouTube Import (${rawUrls?.length || 0} videos)`;
 
             // Immediate toast — user sees feedback right away
             await showToast({
               state: 'importing',
-              text: `正在處理 ${rawUrls?.length || 0} 個影片...`,
-              subtext: `Processing ${rawUrls?.length || 0} videos...`,
+              text: t('toast_processing_videos', [(rawUrls?.length || 0).toString()]),
               progress: 10,
             });
             if (!rawUrls || rawUrls.length === 0) {
-              sendResponse({ success: false, error: 'No URLs provided.' });
+              sendResponse({ success: false, error: t('error_no_urls') });
               return;
             }
 
-            // Deduplicate against existing notebook sources
+            // GLOBAL DEDUP CACHE — primary mechanism (always works)
+            const cacheResult = await deduplicateAgainstCache(rawUrls);
+            let uniqueUrls = cacheResult.uniqueUrls;
+            let dupeCount = cacheResult.skippedCount;
+
+            // Also check NLM tab DOM as secondary dedup (if tab is open)
             const nbInfo = await getNlmNotebookInfo();
-            const uniqueUrls = deduplicateAgainstExisting(rawUrls, nbInfo.existingUrls);
-            const dupeCount = rawUrls.length - uniqueUrls.length;
+            if (nbInfo.existingUrls.length > 0) {
+              const beforeDom = uniqueUrls.length;
+              uniqueUrls = deduplicateAgainstExisting(uniqueUrls, nbInfo.existingUrls);
+              dupeCount += beforeDom - uniqueUrls.length;
+            }
 
             if (uniqueUrls.length === 0) {
               sendResponse({
                 success: true,
                 message: dupeCount > 0
-                  ? `All ${rawUrls.length} videos are already in this notebook.`
-                  : 'No new videos to import.',
+                  ? t('toast_all_exist', [rawUrls.length.toString()])
+                  : t('toast_no_new_videos'),
               });
               await showToast({
                 state: 'success',
-                text: dupeCount > 0 ? `全部 ${rawUrls.length} 個影片已存在於筆記本中` : '沒有新影片需要匯入',
-                subtext: dupeCount > 0 ? `All ${rawUrls.length} videos are already in this notebook` : 'No new videos to import',
+                text: dupeCount > 0 ? t('toast_all_exist', [rawUrls.length.toString()]) : t('toast_no_new_videos'),
               });
               return;
             }
@@ -1475,37 +1581,23 @@ chrome.runtime.onMessage.addListener(
                 }
 
                 if (dedupedUrls.length === 0) {
-                  const nbLabel = matches.length > 1 ? '等相關筆記本' : '';
-                  sendResponse({ success: true, message: `All ${rawUrls.length} videos already exist in "${bestMatch.name}".` });
+                  sendResponse({ success: true, message: t('toast_all_exist_in_notebook', [rawUrls.length.toString(), bestMatch.name]) });
                   await showToast({
                     state: 'success',
-                    text: `全部 ${rawUrls.length} 個影片已存在於「${bestMatch.name}」${nbLabel}中`,
-                    subtext: `All ${rawUrls.length} videos already exist in "${bestMatch.name}"`,
+                    text: t('toast_all_exist_in_notebook', [rawUrls.length.toString(), bestMatch.name]),
                   });
                   return;
                 }
 
-                // Skip oEmbed validation for now — adds latency and YouTube oEmbed
-                // can hang in service worker context. Will revisit for Pro version.
+                // M-3 FIX: Removed dead filterValidYouTubeUrls code and invalidUrls var.
+                // oEmbed validation disabled — revisit for Pro version.
                 const validUrls = dedupedUrls;
-                const invalidUrls: string[] = [];
-
-                if (validUrls.length === 0) {
-                  sendResponse({ success: true, message: `No valid new videos. ${sourceSkipped} duplicates, ${invalidUrls.length} unavailable skipped.` });
-                  await showToast({
-                    state: 'success',
-                    text: `沒有可匯入的新影片（${sourceSkipped} 重複、${invalidUrls.length} 無效）`,
-                    subtext: `No valid new videos. ${sourceSkipped} duplicates, ${invalidUrls.length} unavailable skipped.`,
-                  });
-                  return;
-                }
 
                 if (strategy === 'merge') {
-                  const skipMsg = totalSkipped > 0 ? ` (${sourceSkipped} duplicates, ${invalidUrls.length} unavailable skipped)` : '';
+                  const skipMsg = totalSkipped > 0 ? ` (${totalSkipped} duplicates skipped)` : '';
                   await showToast({
                     state: 'importing',
-                    text: `正在匯入 ${validUrls.length} 個新影片到「${bestMatch.name}」...`,
-                    subtext: `Importing ${validUrls.length} new videos into "${bestMatch.name}"...`,
+                    text: t('toast_importing_to_notebook', [validUrls.length.toString(), bestMatch.name]),
                     progress: 30,
                   });
                   sendResponse({
@@ -1517,7 +1609,19 @@ chrome.runtime.onMessage.addListener(
                 }
 
                 if (strategy === 'ask') {
-                  // Send choice back to popup — popup shows NotebookChoice UI
+                  if (importSource === 'button') {
+                    // Page button has no popup UI — auto-merge into best match
+                    // and show a toast so user knows which notebook was used.
+                    await showToast({
+                      state: 'importing',
+                      text: t('toast_importing_to_notebook', [validUrls.length.toString(), bestMatch.name]),
+                      progress: 30,
+                    });
+                    sendResponse({ success: true, importing: true });
+                    await runAutoSplitImport(validUrls, pageTitle, bestMatch.sourceCount, 50, authuser, bestMatch.id);
+                    return;
+                  }
+                  // Popup import — send choice back so popup shows NotebookChoice UI
                   sendResponse({
                     success: true,
                     needsUserChoice: true,
@@ -1531,29 +1635,16 @@ chrome.runtime.onMessage.addListener(
               }
             }
 
-            // Default: skip oEmbed validation, import directly
+            // Default: import directly (M-3 FIX: removed dead invalidUrls code)
             const defaultValidUrls = uniqueUrls;
-            const defaultInvalidUrls: string[] = [];
-            const totalSkippedDefault = dupeCount + defaultInvalidUrls.length;
-            if (defaultValidUrls.length === 0) {
-              sendResponse({ success: true, message: `No valid videos to import.` });
-              await showToast({
-                state: 'success',
-                text: `沒有可匯入的影片（${defaultInvalidUrls.length} 個無效）`,
-                subtext: `No valid videos to import. ${defaultInvalidUrls.length} unavailable skipped.`,
-              });
-              return;
-            }
-            const skipMsg = totalSkippedDefault > 0 ? ` (${totalSkippedDefault} skipped)` : '';
             await showToast({
               state: 'importing',
-              text: `正在匯入 ${defaultValidUrls.length} 個影片...`,
-              subtext: `Importing ${defaultValidUrls.length} videos...`,
+              text: t('toast_importing_count', [defaultValidUrls.length.toString()]),
               progress: 30,
             });
             sendResponse({
               success: true, importing: true,
-              message: `Importing ${defaultValidUrls.length} videos in background...${skipMsg} You can close this popup.`,
+              message: t('msg_importing_background', [defaultValidUrls.length.toString()]),
             });
             // For create strategy (no match found), we auto-create a new notebook → existingCount=0
             await runAutoSplitImport(defaultValidUrls, pageTitle, 0, 50, authuser);
@@ -1610,6 +1701,8 @@ chrome.runtime.onMessage.addListener(
               return;
             }
 
+            // NEW-2 FIX: Keep SW alive during resumed imports
+            await startKeepAlive();
             const chunk = queue.chunks[queue.currentChunk];
             const result = await importUrlsToNlm(chunk);
 
@@ -1631,6 +1724,8 @@ chrome.runtime.onMessage.addListener(
             }
           } catch (err) {
             sendResponse({ success: false, error: String(err) });
+          } finally {
+            await stopKeepAlive(); // NEW-2 FIX
           }
         })();
         return true;
@@ -1659,6 +1754,95 @@ chrome.runtime.onMessage.addListener(
 
       case 'CLEAR_IMPORT_STATUS' as any: {
         clearImportStatus().then(() => sendResponse({ ok: true }));
+        return true;
+      }
+
+      case 'FORCE_REIMPORT' as any: {
+        // User clicked "Re-import" on dedup toast — clear cache entry and re-import
+        (async () => {
+          try {
+            const { urls: reimportUrls, videoTitle: reimportTitle } = message as any;
+            if (!reimportUrls?.length) { sendResponse({ success: false }); return; }
+
+            // Remove from dedup cache
+            await removeFromDedupCache(reimportUrls);
+
+            // Set toast tab
+            const [ytTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (ytTab?.id) setToastTab(ytTab.id);
+
+            await showToast({
+              state: 'importing',
+              text: t('toast_importing_video', [reimportTitle || '']),
+              progress: 50,
+            });
+
+            // Re-run import (same as QUICK_IMPORT core logic)
+            const result = await importUrlsToNlm(
+              reimportUrls,
+              undefined,
+              undefined,
+              reimportTitle || undefined,
+              async (pct, phase) => {
+                await showToast({ state: 'importing', text: phase, progress: pct });
+              },
+            );
+
+            if (result.success && result.notebookId) {
+              await postImportActions(result.notebookId, result.authuser || '', reimportUrls.length, reimportTitle || 'Video');
+            } else if (!result.success) {
+              await showToast({ state: 'error', text: t('toast_import_failed_short') });
+            }
+            sendResponse(result);
+          } catch (err) {
+            await showToast({ state: 'error', text: t('toast_import_failed_short') });
+            sendResponse({ success: false, error: String(err) });
+          }
+        })();
+        return true;
+      }
+
+      // -----------------------------------------------------------------
+      // Notion Export (v0.3.0)
+      // -----------------------------------------------------------------
+
+      case 'NOTION_EXPORT': {
+        // Static import — dynamic import() triggers Vite's modulePreload polyfill
+        // which uses `document.createElement('link')`, crashing in Service Worker context.
+        try {
+          const { content, videoContent, options } = message as any as {
+            content: string;
+            videoContent: VideoContent;
+            options: NotionExportOptions;
+          };
+          const result = notionExport(content, videoContent, options);
+          sendResponse(result);
+        } catch (err) {
+          sendResponse({ markdown: '', citationsResolved: 0, citationsTotal: 0, error: String(err) });
+        }
+        break;
+      }
+
+      case 'STORE_VIDEO_CONTENT': {
+        // Store the last imported videoContent in session storage, scoped by NLM tabId.
+        // Each NLM tab keeps only the latest entry to prevent memory leak.
+        (async () => {
+          try {
+            const { videoContent } = message as any as { videoContent: VideoContent };
+            // Find the NLM tab to scope the key
+            const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
+            const nlmTabId = nlmTabs[0]?.id ?? 0;
+            await chrome.storage.session.set({
+              [`_videolm_lastVideo_${nlmTabId}`]: {
+                videoContent,
+                storedAt: Date.now(),
+              },
+            });
+            sendResponse({ ok: true });
+          } catch (err) {
+            sendResponse({ ok: false, error: String(err) });
+          }
+        })();
         return true;
       }
 

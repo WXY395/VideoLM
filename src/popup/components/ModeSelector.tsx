@@ -1,5 +1,6 @@
 import React from 'react';
 import type { ImportMode } from '@/types';
+import { t } from '@/utils/i18n';
 
 interface ModeSelectorProps {
   value: ImportMode;
@@ -7,18 +8,18 @@ interface ModeSelectorProps {
   hasAI: boolean;
 }
 
-const modes: Array<{ value: ImportMode; label: string; description?: string; needsAI: boolean }> = [
-  { value: 'quick', label: 'Quick Import (URL)', description: 'Send YouTube URL directly to NotebookLM', needsAI: false },
-  { value: 'raw', label: 'Raw Transcript', needsAI: false },
-  { value: 'structured', label: 'AI Structured', needsAI: true },
-  { value: 'summary', label: 'AI Summary', needsAI: true },
-  { value: 'chapters', label: 'Chapter Split', needsAI: true },
+const modes: Array<{ value: ImportMode; labelKey: string; descKey?: string; needsAI: boolean }> = [
+  { value: 'quick', labelKey: 'mode_quick', descKey: 'mode_quick_desc', needsAI: false },
+  { value: 'raw', labelKey: 'mode_raw', needsAI: false },
+  { value: 'structured', labelKey: 'mode_structured', needsAI: true },
+  { value: 'summary', labelKey: 'mode_summary', needsAI: true },
+  { value: 'chapters', labelKey: 'mode_chapters', needsAI: true },
 ];
 
 export function ModeSelector({ value, onChange, hasAI }: ModeSelectorProps) {
   return (
     <div className="mode-selector">
-      <div className="mode-selector__label">Import Mode</div>
+      <div className="mode-selector__label">{t('mode_label')}</div>
       {modes.map((mode) => {
         const disabled = mode.needsAI && !hasAI;
         return (
@@ -34,12 +35,12 @@ export function ModeSelector({ value, onChange, hasAI }: ModeSelectorProps) {
               disabled={disabled}
               onChange={() => onChange(mode.value)}
             />
-            {mode.label}
-            {mode.description && (
-              <span className="mode-option__desc">{mode.description}</span>
+            {t(mode.labelKey)}
+            {mode.descKey && (
+              <span className="mode-option__desc">{t(mode.descKey)}</span>
             )}
             {disabled && (
-              <span className="mode-option__badge">Needs API Key or Pro</span>
+              <span className="mode-option__badge">{t('mode_needs_ai')}</span>
             )}
           </label>
         );

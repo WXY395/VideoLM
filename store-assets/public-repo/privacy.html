@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VideoLM — Privacy Policy</title>
+  <style>
+    :root { --bg: #0D1B2A; --card: #1B2838; --text: #E0E0E0; --muted: #9AA0A6; --accent: #00838F; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
+    .container { max-width: 720px; margin: 0 auto; padding: 48px 24px; }
+    h1 { font-size: 28px; margin-bottom: 8px; color: #fff; }
+    .subtitle { color: var(--muted); margin-bottom: 32px; font-size: 14px; }
+    h2 { font-size: 18px; color: var(--accent); margin: 32px 0 12px; }
+    p, li { font-size: 15px; color: var(--text); margin-bottom: 8px; }
+    ul { padding-left: 24px; }
+    li { margin-bottom: 6px; }
+    .card { background: var(--card); border-radius: 12px; padding: 24px; margin: 16px 0; border: 1px solid rgba(255,255,255,0.06); }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .badge { display: inline-block; background: var(--accent); color: #fff; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; margin-left: 8px; vertical-align: middle; }
+    .footer { margin-top: 48px; padding-top: 24px; border-top: 1px solid rgba(255,255,255,0.08); color: var(--muted); font-size: 13px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>VideoLM <span class="badge">Privacy Policy</span></h1>
+    <p class="subtitle">Last updated: April 3, 2026</p>
+
+    <div class="card">
+      <p><strong>VideoLM does not collect, store, or transmit any personal information.</strong></p>
+    </div>
+
+    <h2>Data Handling</h2>
+    <ul>
+      <li>YouTube video URLs and page titles are processed locally in your browser</li>
+      <li>NotebookLM session tokens are used temporarily for API communication and are never stored</li>
+      <li>No user data is ever stored on external servers; all session information is transient and exists only during the active import task</li>
+      <li>Import preferences are saved locally via Chrome's storage API</li>
+      <li>No analytics, tracking, or telemetry data is collected</li>
+      <li>No data is sent to any third-party server</li>
+    </ul>
+
+    <h2>External Communications</h2>
+    <p>The extension only communicates with:</p>
+    <ul>
+      <li><strong>youtube.com</strong> — to read video content from pages you visit</li>
+      <li><strong>notebooklm.google.com</strong> — to import content into your notebooks</li>
+    </ul>
+
+    <h2>Media Files</h2>
+    <p>VideoLM does not download or store any media files (audio, video). It only transfers publicly available metadata (URLs and titles).</p>
+
+    <h2>Permissions</h2>
+    <ul>
+      <li><strong>activeTab</strong> — Read the current YouTube page to extract video URLs</li>
+      <li><strong>storage</strong> — Save import preferences locally on your device</li>
+      <li><strong>scripting</strong> — Securely inject the import button and extract public metadata</li>
+      <li><strong>notifications</strong> — Show import completion alerts</li>
+      <li><strong>Host access</strong> (youtube.com, notebooklm.google.com) — Bridge communication between YouTube and NotebookLM using only publicly available metadata</li>
+    </ul>
+
+    <h2>Contact</h2>
+    <p>For questions about this privacy policy, contact: <a href="mailto:a0970292729@mail.com">a0970292729@mail.com</a></p>
+
+    <div class="footer">
+      &copy; 2026 VideoLM. All rights reserved.
+    </div>
+  </div>
+</body>
+</html>

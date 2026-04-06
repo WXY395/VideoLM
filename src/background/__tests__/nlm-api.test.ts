@@ -46,16 +46,22 @@ describe('findMatchingNotebooks', () => {
     expect(matches.length).toBe(0);
   });
 
-  it('DOES match short CJK names (≥ 2 chars) — CJK chars carry more meaning', () => {
-    const cjkNotebooks = [makeNotebook('小船', 17)];
-    const matches = findMatchingNotebooks(cjkNotebooks, '小船');
+  it('DOES match CJK names (≥ 3 chars) — M-10 FIX raised threshold', () => {
+    const cjkNotebooks = [makeNotebook('小船頻道', 17)];
+    const matches = findMatchingNotebooks(cjkNotebooks, '小船頻道');
     expect(matches.length).toBe(1);
-    expect(matches[0].name).toBe('小船');
+    expect(matches[0].name).toBe('小船頻道');
   });
 
-  it('does NOT match single CJK char (< 2 chars)', () => {
+  it('does NOT match very short CJK names (< 3 chars) — M-10 FIX raised threshold', () => {
+    const cjkNotebooks = [makeNotebook('小船', 17)];
+    const matches = findMatchingNotebooks(cjkNotebooks, '小船');
+    expect(matches.length).toBe(0); // 2 CJK chars below new threshold of 3
+  });
+
+  it('does NOT match single CJK char (< 3 chars)', () => {
     const matches = findMatchingNotebooks(notebooks, '短');
-    expect(matches.length).toBe(0); // "短" is only 1 char
+    expect(matches.length).toBe(0);
   });
 
   it('returns empty for empty title', () => {

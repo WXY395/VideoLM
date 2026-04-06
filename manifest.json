@@ -1,13 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "VideoLM",
-  "version": "0.1.0",
-  "description": "Import video content into Google NotebookLM with AI-powered processing",
+  "name": "__MSG_ext_name__",
+  "version": "0.2.0",
+  "description": "__MSG_ext_description__",
+  "default_locale": "en",
   "permissions": [
     "activeTab",
     "storage",
     "scripting",
-    "notifications"
+    "notifications",
+    "alarms"
   ],
   "host_permissions": [
     "https://notebooklm.google.com/*",
