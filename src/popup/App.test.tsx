@@ -23,11 +23,16 @@ beforeEach(() => {
     return Promise.resolve(resp);
   });
 
-  // Install chrome global
+  // Install chrome global (including i18n mock that returns the key)
   Object.defineProperty(globalThis, 'chrome', {
     value: {
-      runtime: { sendMessage: mockSendMessage },
+      runtime: { sendMessage: mockSendMessage, lastError: null },
       tabs: { query: mockTabsQuery, sendMessage: mockTabsSendMessage },
+      i18n: { getMessage: (key: string) => key, getUILanguage: () => 'en' },
+      storage: {
+        session: { get: (_k: string, cb: (r: any) => void) => cb({}), set: () => {} },
+        local: { get: () => Promise.resolve({}), set: () => Promise.resolve() },
+      },
     },
     writable: true,
     configurable: true,
@@ -37,17 +42,18 @@ beforeEach(() => {
 describe('App', () => {
   it('renders the heading', () => {
     render(<App />);
-    expect(screen.getByText('VideoLM')).toBeInTheDocument();
+    // i18n mock returns the key itself
+    expect(screen.getByText('popup_title')).toBeInTheDocument();
   });
 
   it('renders the subheading', () => {
     render(<App />);
-    expect(screen.getByText('AI Video to NotebookLM')).toBeInTheDocument();
+    expect(screen.getByText('popup_subtitle')).toBeInTheDocument();
   });
 
   it('shows loading state initially', () => {
     render(<App />);
-    expect(screen.getByText(/Loading video info|Extracting video URLs/)).toBeInTheDocument();
+    expect(screen.getByText(/popup_loading_video|popup_extracting_urls/)).toBeInTheDocument();
   });
 
   it('shows error state for non-YouTube pages', async () => {
@@ -87,7 +93,8 @@ describe('App', () => {
 
     render(<App />);
 
-    const videoCount = await screen.findByText('2 videos found');
+    // i18n mock returns key — video_count_found with placeholder not substituted
+    const videoCount = await screen.findByText('video_count_found');
     expect(videoCount).toBeInTheDocument();
   });
 
@@ -122,13 +129,14 @@ describe('App', () => {
 
     render(<App />);
 
-    const videoCount = await screen.findByText('60 videos found');
+    const videoCount = await screen.findByText('video_count_found');
     expect(videoCount).toBeInTheDocument();
 
-    const splitButton = await screen.findByText('Auto-split into 2 notebooks');
+    // i18n mock returns key for split/first-N buttons
+    const splitButton = await screen.findByText('batch_auto_split');
     expect(splitButton).toBeInTheDocument();
 
-    const first50Button = await screen.findByText('Import first 50 only');
+    const first50Button = await screen.findByText('batch_import_first');
     expect(first50Button).toBeInTheDocument();
   });
 });

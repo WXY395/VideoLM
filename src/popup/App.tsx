@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import type { ImportMode, ImportResult } from '@/types';
+import { t } from '@/utils/i18n';
 import { useVideoContent } from './hooks/useVideoContent';
 import { useSettings } from './hooks/useSettings';
 import { VideoInfo } from './components/VideoInfo';
@@ -10,10 +11,22 @@ import { ProgressBar, type ProgressStatus } from './components/ProgressBar';
 import { DuplicateWarning, type DuplicateAction } from './components/DuplicateWarning';
 import { NotebookChoice } from './components/NotebookChoice';
 import { SettingsPage } from './components/SettingsPage';
+import { NotionExportPanel } from './components/NotionExportPanel';
+import { MAX_BATCH_SIZE } from '@/background/batch-queue';
 import './styles.css';
 
 const FREE_MONTHLY_LIMIT = 100;
-const MAX_BATCH_SIZE = 50;
+// H-5 FIX: MAX_BATCH_SIZE imported from batch-queue (single source of truth)
+
+/** NEW-3 FIX: Safe sendMessage wrapper — checks chrome.runtime.lastError */
+function safeSendMsg(msg: any, cb: (r: any) => void): void {
+  chrome.runtime.sendMessage(msg, (r) => {
+    if (chrome.runtime.lastError) {
+      console.log('[VideoLM popup]', chrome.runtime.lastError.message);
+    }
+    cb(r);
+  });
+}
 
 interface ProgressItem {
   title: string;
@@ -31,6 +44,7 @@ export function App() {
   const [result, setResult] = useState<ImportResult | null>(null);
   const [duplicateTitle, setDuplicateTitle] = useState<string | null>(null);
   const [pendingQueue, setPendingQueue] = useState<{ remaining: number; pageTitle: string } | null>(null);
+  const [lastClipboardText, setLastClipboardText] = useState<string | null>(null);
   const [notebookChoice, setNotebookChoice] = useState<{
     notebook: { id: string; name: string; sourceCount: number; emoji: string };
     urls: string[];
@@ -53,13 +67,12 @@ export function App() {
     : undefined;
 
   // Check for import status + pending queue on popup open
-  const [importStatus, setImportStatusState] = useState<any>(null);
+  // L-3 FIX: Removed unused importStatus state — status is only used for side effects
 
   useEffect(() => {
     // Check if there's an active or completed import
-    chrome.runtime.sendMessage({ type: 'GET_IMPORT_STATUS' }, (status) => {
+    safeSendMsg({ type: 'GET_IMPORT_STATUS' }, (status) => {
       if (status) {
-        setImportStatusState(status);
         // If import is active, show as importing
         if (status.active) {
           setImporting(true);
@@ -82,7 +95,7 @@ export function App() {
     });
 
     // Check for pending notebook choice (ask-mode dedup)
-    chrome.runtime.sendMessage({ type: 'GET_NOTEBOOK_CHOICE' }, (response) => {
+    safeSendMsg({ type: 'GET_NOTEBOOK_CHOICE' }, (response) => {
       if (response?.existingNotebook) {
         setNotebookChoice(response);
         setImporting(false); // Stop "importing" state — show choice instead
@@ -90,7 +103,7 @@ export function App() {
     });
 
     // Also check pending queue
-    chrome.runtime.sendMessage({ type: 'CHECK_PENDING_QUEUE' }, (response) => {
+    safeSendMsg({ type: 'CHECK_PENDING_QUEUE' }, (response) => {
       if (response?.hasPending && response.remainingUrls > 0) {
         setPendingQueue({ remaining: response.remainingUrls, pageTitle: response.pageTitle || 'Batch Import' });
       }
@@ -108,7 +121,7 @@ export function App() {
     }));
     setProgress({ items, completed: 0, total: urls.length });
 
-    chrome.runtime.sendMessage(
+    safeSendMsg(
       {
         type: 'BATCH_IMPORT',
         urls,
@@ -166,7 +179,7 @@ export function App() {
   const handleResumeBatch = useCallback(() => {
     setImporting(true);
     setPendingQueue(null);
-    chrome.runtime.sendMessage({ type: 'RESUME_BATCH' }, (response) => {
+    safeSendMsg({ type: 'RESUME_BATCH' }, (response) => {
       setImporting(false);
       if (response?.success) {
         setResult({
@@ -189,8 +202,8 @@ export function App() {
     setNotebookChoice(null);
     setImporting(true);
     setResult(null);
-    chrome.runtime.sendMessage({ type: 'CLEAR_NOTEBOOK_CHOICE' });
-    chrome.runtime.sendMessage(
+    safeSendMsg({ type: 'CLEAR_NOTEBOOK_CHOICE' }, () => {});
+    safeSendMsg(
       {
         type: 'BATCH_IMPORT_WITH_TARGET',
         urls: notebookChoice.urls,
@@ -213,7 +226,7 @@ export function App() {
 
   const handleCreateNewChoice = useCallback(() => {
     if (!notebookChoice) return;
-    chrome.runtime.sendMessage({ type: 'CLEAR_NOTEBOOK_CHOICE' });
+    safeSendMsg({ type: 'CLEAR_NOTEBOOK_CHOICE' }, () => {});
     const { urls } = notebookChoice;
     setNotebookChoice(null);
     handleBatchImport(urls);
@@ -228,7 +241,7 @@ export function App() {
 
     // Quick Import: send URL directly, no transcript extraction needed
     if (effectiveMode === 'quick') {
-      chrome.runtime.sendMessage(
+      safeSendMsg(
         {
           type: 'QUICK_IMPORT',
           videoUrl: content.url,
@@ -274,7 +287,7 @@ export function App() {
       setProgress({ items, completed: 0, total: items.length });
     }
 
-    chrome.runtime.sendMessage(
+    safeSendMsg(
       {
         type: 'PROCESS_AND_IMPORT',
         videoContent: content,
@@ -291,6 +304,8 @@ export function App() {
             } catch {
               // Clipboard write may fail -- content is still in response
             }
+            // Save for Notion export panel
+            setLastClipboardText(response.clipboardText);
           }
 
           setResult({
@@ -300,18 +315,16 @@ export function App() {
             message: response.message || 'Content copied to clipboard! Paste into NotebookLM as a "Copied text" source.',
           });
 
-          // Mark progress items as done
-          if (progress) {
-            setProgress((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    completed: prev.total,
-                    items: prev.items.map((it) => ({ ...it, status: 'done' as ProgressStatus })),
-                  }
-                : null
-            );
-          }
+          // H-11 FIX: Use functional updater — avoids stale `progress` closure
+          setProgress((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  completed: prev.total,
+                  items: prev.items.map((it) => ({ ...it, status: 'done' as ProgressStatus })),
+                }
+              : null
+          );
         } else {
           setResult({
             success: false,
@@ -321,7 +334,7 @@ export function App() {
         }
       }
     );
-  }, [content, effectiveMode, progress]);
+  }, [content, effectiveMode]);
 
   const handleDuplicateAction = useCallback(
     (action: DuplicateAction) => {
@@ -350,14 +363,14 @@ export function App() {
       <div className="popup-header">
         <div className="popup-header__row">
           <div>
-            <h1>VideoLM</h1>
-            <p>AI Video to NotebookLM</p>
+            <h1>{t('popup_title')}</h1>
+            <p>{t('popup_subtitle')}</p>
           </div>
           <button
             className="settings-gear"
             onClick={() => setShowSettings(true)}
-            aria-label="Settings"
-            title="Settings"
+            aria-label={t('popup_settings')}
+            title={t('popup_settings')}
           >
             &#9881;
           </button>
@@ -370,21 +383,20 @@ export function App() {
       {pendingQueue && !importing && (
         <div className="batch-resume">
           <div className="batch-resume__text">
-            Previous batch import has {pendingQueue.remaining} videos remaining
-            ({pendingQueue.pageTitle}).
+            {t('popup_batch_resume', [pendingQueue.remaining.toString(), pendingQueue.pageTitle])}
           </div>
           <div className="batch-resume__actions">
             <button
               className="batch-resume__button"
               onClick={handleResumeBatch}
             >
-              Resume Import
+              {t('popup_resume_import')}
             </button>
             <button
               className="batch-resume__button batch-resume__button--dismiss"
               onClick={() => setPendingQueue(null)}
             >
-              Dismiss
+              {t('popup_dismiss')}
             </button>
           </div>
         </div>
@@ -393,14 +405,14 @@ export function App() {
       {contentLoading && (
         <div className="loading-state">
           <div className="spinner" style={{ margin: '0 auto 8px' }} />
-          {isBatchPage ? 'Extracting video URLs...' : 'Loading video info...'}
+          {isBatchPage ? t('popup_extracting_urls') : t('popup_loading_video')}
         </div>
       )}
 
       {contentError && (
         <div className="error-state">
           <div className="error-state__icon">!</div>
-          <div className="error-state__title">Cannot import</div>
+          <div className="error-state__title">{t('popup_cannot_import')}</div>
           <div>{contentError}</div>
         </div>
       )}
@@ -436,8 +448,7 @@ export function App() {
 
               {effectiveMode !== 'quick' && content.transcript.length === 0 && (
                 <div className="status-message status-message--error">
-                  This video has no subtitles available. Transcript-based modes require subtitles (CC).
-                  Try Quick Import or a video with the CC icon enabled.
+                  {t('popup_no_subtitles')}
                 </div>
               )}
 
@@ -482,9 +493,17 @@ export function App() {
               }`}
             >
               {result.success
-                ? result.message ?? 'Imported successfully!'
-                : result.error ?? 'Import failed.'}
+                ? result.message ?? t('popup_imported_success')
+                : result.error ?? t('popup_import_failed')}
             </div>
+          )}
+
+          {/* Notion Export — appears after successful import with text content */}
+          {result?.success && content && lastClipboardText && (
+            <NotionExportPanel
+              videoContent={content}
+              clipboardText={lastClipboardText}
+            />
           )}
         </>
       )}

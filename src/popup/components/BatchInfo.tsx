@@ -1,4 +1,5 @@
 import React from 'react';
+import { t } from '@/utils/i18n';
 
 interface BatchInfoProps {
   pageType: 'playlist' | 'channel' | 'search';
@@ -26,8 +27,7 @@ export function BatchInfo({
     <div className="batch-info">
       {needsSplit && (
         <div className="batch-info__warning">
-          NotebookLM supports up to {MAX_BATCH_SIZE} sources per notebook.
-          This {pageType} has {videoCount} videos.
+          {t('batch_size_warning', [MAX_BATCH_SIZE.toString(), pageType, videoCount.toString()])}
         </div>
       )}
 
@@ -39,7 +39,7 @@ export function BatchInfo({
               onClick={onImportFirst50}
               disabled={importing}
             >
-              {importing ? 'Importing...' : `Import first ${MAX_BATCH_SIZE} only`}
+              {importing ? t('common_importing') : t('batch_import_first', [MAX_BATCH_SIZE.toString()])}
             </button>
             <button
               className="batch-info__button batch-info__button--primary"
@@ -47,8 +47,8 @@ export function BatchInfo({
               disabled={importing}
             >
               {importing
-                ? 'Importing...'
-                : `Auto-split into ${notebookCount} notebooks`}
+                ? t('common_importing')
+                : t('batch_auto_split', [notebookCount.toString()])}
             </button>
           </>
         ) : (
@@ -58,8 +58,8 @@ export function BatchInfo({
             disabled={importing || videoCount === 0}
           >
             {importing
-              ? 'Importing...'
-              : `Import ${videoCount} Videos to NotebookLM`}
+              ? t('common_importing')
+              : t('batch_import_all', [videoCount.toString()])}
           </button>
         )}
       </div>

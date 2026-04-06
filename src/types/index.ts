@@ -114,6 +114,49 @@ export interface UserSettings {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Notion Export (v0.3.0)
+// ---------------------------------------------------------------------------
+
+/** A resolved citation mapping NLM [n] to a video timestamp */
+export interface VideoCitation {
+  /** Citation number from NLM response — [1], [2], etc. */
+  id: number;
+  /** Resolved timestamp in integer seconds */
+  timestamp: number;
+  /** YouTube video ID */
+  videoId: string;
+  /** How the timestamp was resolved */
+  confidence: 'exact' | 'fuzzy' | 'none';
+}
+
+/** Options for the Notion export transformation */
+export interface NotionExportOptions {
+  /** Prepend > [!INFO] callout block with video metadata */
+  includeCallout: boolean;
+  /** Convert list items (- / *) to checkboxes (- [ ]) */
+  includeCheckboxes: boolean;
+  /** Convert [n] citations to timestamped hyperlinks */
+  includeTimestampLinks: boolean;
+  /** Prepend spec-script for AI anti-drift. Default true when omitted. */
+  includeSpecScript?: boolean;
+  /**
+   * After decode, if citation tag count ≠ link count: `warn` logs + optional callout line;
+   * `throw` aborts with Error. Default `warn`.
+   */
+  citationParityMode?: 'warn' | 'throw';
+}
+
+/** Result of the Notion export transformation */
+export interface NotionExportResult {
+  /** Notion-optimized markdown ready for clipboard */
+  markdown: string;
+  /** How many citations got timestamp hyperlinks */
+  citationsResolved: number;
+  /** Total citations found in the text */
+  citationsTotal: number;
+}
+
 /** Result when checking for duplicate sources in a notebook */
 export interface DuplicateCheckResult {
   isDuplicate: boolean;
@@ -144,4 +187,9 @@ export type MessageType =
   | { type: 'GET_NOTEBOOK_CHOICE' }
   | { type: 'CLEAR_NOTEBOOK_CHOICE' }
   | { type: 'RESUME_BATCH' }
-  | { type: 'CHECK_PENDING_QUEUE' };
+  | { type: 'CHECK_PENDING_QUEUE' }
+  // Notion Export (v0.3.0)
+  | { type: 'NOTION_EXPORT'; content: string; videoContent: VideoContent; options: NotionExportOptions }
+  | { type: 'STORE_VIDEO_CONTENT'; videoContent: VideoContent }
+  | { type: 'READ_NLM_RESPONSE' }
+  | { type: 'NLM_RESPONSE'; data: { text: string; citationCount: number } };

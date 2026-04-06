@@ -43,7 +43,7 @@ export function useVideoContent(): UseVideoContentResult {
           throw new Error('Open a YouTube page to use VideoLM');
         }
 
-        const detectedType = getPageType(tab.url!);
+        const detectedType = getPageType(tab.url ?? '');
         if (!cancelled) setPageType(detectedType);
 
         if (detectedType === 'watch') {
@@ -56,7 +56,7 @@ export function useVideoContent(): UseVideoContentResult {
             setPageTitle(response.data.title);
           } else {
             // Fallback: minimal VideoContent from URL
-            const url = tab.url!;
+            const url = tab.url ?? '';
             const videoId = new URL(url).searchParams.get('v') || '';
             const title = tab.title?.replace(' - YouTube', '') || 'Unknown Video';
             setContent({
@@ -80,7 +80,8 @@ export function useVideoContent(): UseVideoContentResult {
           const response = await chrome.runtime.sendMessage({ type: 'EXTRACT_VIDEO_URLS' });
           if (cancelled) return;
 
-          if (response?.urls && Array.isArray(response.urls)) {
+          if (response?.urls && Array.isArray(response.urls) && response.urls.length > 0) {
+            // H-6 FIX: Only set batch URLs if non-empty (empty array → throw error)
             setBatchUrls(response.urls);
             if (response.pageTitle) setPageTitle(response.pageTitle);
             // Create minimal VideoContent for batch context
@@ -92,7 +93,7 @@ export function useVideoContent(): UseVideoContentResult {
               transcript: [],
               duration: 0,
               language: 'unknown',
-              url: tab.url!,
+              url: tab.url ?? '',
               metadata: { publishDate: '', viewCount: 0, tags: [] },
             });
           } else {

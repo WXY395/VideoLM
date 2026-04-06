@@ -12,7 +12,10 @@
  * is unreachable (tab closed, navigated away, etc.)
  */
 
+import { t } from '@/utils/i18n';
+
 /** Which tab to show toasts on (set when import starts) */
+// H-1 FIX: Persist to chrome.storage.session so it survives SW restart
 let activeToastTabId: number | null = null;
 
 /**
@@ -20,18 +23,26 @@ let activeToastTabId: number | null = null;
  */
 export function setToastTab(tabId: number): void {
   activeToastTabId = tabId;
+  try { chrome.storage.session?.set({ _videolm_toastTab: tabId }); } catch { /* ignore */ }
 }
 
 export function getToastTabId(): number | null {
   return activeToastTabId;
 }
 
+// Restore on SW restart
+try {
+  chrome.storage.session?.get('_videolm_toastTab', (r) => {
+    if (r?._videolm_toastTab) activeToastTabId = r._videolm_toastTab;
+  });
+} catch { /* ignore */ }
+
 export interface ToastOptions {
   /** 'importing' | 'success' | 'error' */
   state: 'importing' | 'success' | 'error';
-  /** Main text to display (Chinese) */
+  /** Main text to display */
   text: string;
-  /** Secondary text line (English) — shown below main text in smaller font */
+  /** Secondary text line — shown below main text in smaller font */
   subtext?: string;
   /** Progress 0-100 (only for 'importing' state) */
   progress?: number;
@@ -39,6 +50,10 @@ export interface ToastOptions {
   viewUrl?: string;
   /** Auto-dismiss after N ms (default: 6000 for success/error, never for importing) */
   dismissAfter?: number;
+  /** Action button label (e.g. "Re-import") */
+  actionLabel?: string;
+  /** Message sent to SW when action button is clicked */
+  actionMessage?: Record<string, unknown>;
 }
 
 /**
@@ -49,10 +64,10 @@ export async function showToast(options: ToastOptions): Promise<void> {
   const tabId = activeToastTabId;
   if (!tabId) return;
 
-  // Verify tab still exists
+  // L-5 FIX: Verify tab still exists AND is a YouTube page (content script host)
   try {
     const tab = await chrome.tabs.get(tabId);
-    if (!tab?.url) return;
+    if (!tab?.url || !tab.url.includes('youtube.com')) return;
   } catch {
     activeToastTabId = null;
     return;
@@ -73,7 +88,7 @@ export async function showToast(options: ToastOptions): Promise<void> {
         chrome.notifications.create(`videolm-toast-${Date.now()}`, {
           type: 'basic',
           iconUrl: chrome.runtime.getURL('icons/icon48.png'),
-          title: options.state === 'success' ? 'VideoLM' : 'VideoLM Error',
+          title: options.state === 'success' ? t('popup_title') : t('notif_error_title'),
           message: options.subtext || options.text,
           silent: options.state === 'error',
         });

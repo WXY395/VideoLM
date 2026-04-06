@@ -1,0 +1,407 @@
+{
+  "ext_name": {
+    "message": "VideoLM — AI Video Import to NotebookLM",
+    "description": "Extension name for CWS and chrome://extensions"
+  },
+  "ext_description": {
+    "message": "One-click import YouTube videos, playlists & channels into NotebookLM. Smart deduplication & auto-batching.",
+    "description": "Extension description for CWS listing"
+  },
+
+  "common_importing": {
+    "message": "Importing...",
+    "description": "Generic importing state"
+  },
+  "common_processing": {
+    "message": "Processing...",
+    "description": "Generic processing state"
+  },
+  "common_back": {
+    "message": "← Back",
+    "description": "Back button label"
+  },
+  "common_pro_badge": {
+    "message": "PRO",
+    "description": "Pro badge label"
+  },
+
+  "btn_notebooklm": {
+    "message": "NotebookLM",
+    "description": "Button label on YouTube pages"
+  },
+  "btn_extracting": {
+    "message": "Extracting...",
+    "description": "Button label while extracting URLs"
+  },
+  "btn_no_videos": {
+    "message": "No videos found",
+    "description": "Button label when no videos detected"
+  },
+  "btn_importing_count": {
+    "message": "Importing $COUNT$...",
+    "description": "Button label with video count",
+    "placeholders": { "count": { "content": "$1", "example": "23" } }
+  },
+
+  "toast_importing_video": {
+    "message": "Importing \"$TITLE$\"...",
+    "description": "Toast when importing a single video",
+    "placeholders": { "title": { "content": "$1", "example": "My Video Title" } }
+  },
+  "toast_processing_videos": {
+    "message": "Processing $COUNT$ videos...",
+    "description": "Toast when processing batch videos",
+    "placeholders": { "count": { "content": "$1", "example": "23" } }
+  },
+  "toast_processing_search": {
+    "message": "Processing $COUNT$ search results...",
+    "description": "Toast when processing search results",
+    "placeholders": { "count": { "content": "$1", "example": "20" } }
+  },
+  "toast_no_videos": {
+    "message": "No videos found on this page",
+    "description": "Toast when no videos detected"
+  },
+  "toast_no_videos_scroll": {
+    "message": "No videos found. Try scrolling down to load more results.",
+    "description": "Toast for search pages with scroll hint"
+  },
+  "toast_extension_updated": {
+    "message": "Extension updated — please refresh the page.",
+    "description": "Toast when extension context is invalidated"
+  },
+  "toast_connecting": {
+    "message": "Connecting to NotebookLM...",
+    "description": "Toast during NLM connection"
+  },
+  "toast_submitting": {
+    "message": "Submitting $COUNT$ videos...",
+    "description": "Toast during API submission",
+    "placeholders": { "count": { "content": "$1", "example": "23" } }
+  },
+  "toast_nlm_processing": {
+    "message": "NotebookLM processing...",
+    "description": "Toast while NLM processes sources"
+  },
+  "toast_importing_count": {
+    "message": "Importing $COUNT$ videos...",
+    "description": "Toast with video count",
+    "placeholders": { "count": { "content": "$1", "example": "23" } }
+  },
+  "toast_importing_to_notebook": {
+    "message": "Importing $COUNT$ videos into \"$NAME$\"...",
+    "description": "Toast importing to specific notebook",
+    "placeholders": {
+      "count": { "content": "$1", "example": "23" },
+      "name": { "content": "$2", "example": "My Notebook" }
+    }
+  },
+  "toast_merging_part": {
+    "message": "Merging into Part $PART$... ($DONE$/$TOTAL$)",
+    "description": "Toast during part merge",
+    "placeholders": {
+      "part": { "content": "$1", "example": "2" },
+      "done": { "content": "$2", "example": "50" },
+      "total": { "content": "$3", "example": "120" }
+    }
+  },
+  "toast_creating_part": {
+    "message": "Creating Part $PART$... ($DONE$/$TOTAL$)",
+    "description": "Toast during part creation",
+    "placeholders": {
+      "part": { "content": "$1", "example": "2" },
+      "done": { "content": "$2", "example": "50" },
+      "total": { "content": "$3", "example": "120" }
+    }
+  },
+  "toast_importing_to_part": {
+    "message": "Importing to Part $PART$... ($DONE$/$TOTAL$)",
+    "description": "Toast importing to part notebook",
+    "placeholders": {
+      "part": { "content": "$1", "example": "2" },
+      "done": { "content": "$2", "example": "50" },
+      "total": { "content": "$3", "example": "120" }
+    }
+  },
+  "toast_import_failed": {
+    "message": "Import failed: $ERROR$",
+    "description": "Toast on import failure",
+    "placeholders": { "error": { "content": "$1", "example": "Network error" } }
+  },
+  "toast_import_failed_short": {
+    "message": "Import failed",
+    "description": "Short import failure message"
+  },
+  "toast_single_imported": {
+    "message": "\"$TITLE$\" imported!",
+    "description": "Toast after single video import",
+    "placeholders": { "title": { "content": "$1", "example": "My Video" } }
+  },
+  "toast_multi_imported": {
+    "message": "$COUNT$ videos from \"$TITLE$\" imported!",
+    "description": "Toast after batch import",
+    "placeholders": {
+      "count": { "content": "$1", "example": "23" },
+      "title": { "content": "$2", "example": "My Playlist" }
+    }
+  },
+  "toast_video_already_imported": {
+    "message": "This video was already imported — skipped",
+    "description": "Toast when duplicate video detected"
+  },
+  "toast_already_imported_detail": {
+    "message": "\"$TITLE$\" already imported — skipped",
+    "description": "Toast with video title for duplicate",
+    "placeholders": { "title": { "content": "$1", "example": "My Video" } }
+  },
+  "toast_all_exist": {
+    "message": "All $COUNT$ videos are already in this notebook",
+    "description": "Toast when all videos are duplicates",
+    "placeholders": { "count": { "content": "$1", "example": "10" } }
+  },
+  "toast_all_exist_in_notebook": {
+    "message": "All $COUNT$ videos already exist in \"$NAME$\"",
+    "description": "Toast when all exist in specific notebook",
+    "placeholders": {
+      "count": { "content": "$1", "example": "10" },
+      "name": { "content": "$2", "example": "My Notebook" }
+    }
+  },
+  "toast_no_new_videos": {
+    "message": "No new videos to import",
+    "description": "Toast when no new videos found"
+  },
+  "toast_reimport_btn": {
+    "message": "Re-import →",
+    "description": "Button label on dedup toast to force re-import"
+  },
+
+  "notif_import_complete": {
+    "message": "VideoLM Import Complete",
+    "description": "System notification title"
+  },
+  "notif_error_title": {
+    "message": "VideoLM Error",
+    "description": "System notification error title"
+  },
+
+  "error_quota_exceeded": {
+    "message": "Monthly import quota exceeded.",
+    "description": "Error when quota is reached"
+  },
+  "error_ai_requires_key": {
+    "message": "AI processing requires a BYOK API key or VideoLM Pro.",
+    "description": "Error when AI feature requires key"
+  },
+  "error_no_urls": {
+    "message": "No URLs provided.",
+    "description": "Error when no URLs in batch"
+  },
+  "error_cannot_autocreate": {
+    "message": "Could not auto-create notebook. Please open NotebookLM and try again.",
+    "description": "Error when notebook creation fails"
+  },
+  "error_no_notebook": {
+    "message": "No notebook found. Please open NotebookLM or try again.",
+    "description": "Error when no NLM notebook is accessible"
+  },
+  "error_cannot_connect": {
+    "message": "Cannot connect to NotebookLM. Please check your login.",
+    "description": "Error when NLM connection fails"
+  },
+  "error_cannot_read_video": {
+    "message": "Could not read video data. Try refreshing.",
+    "description": "Error when video data extraction fails"
+  },
+  "error_api_failed": {
+    "message": "API import failed.",
+    "description": "Error when batchexecute API fails"
+  },
+
+  "msg_single_added": {
+    "message": "YouTube video added to your NotebookLM notebook!",
+    "description": "Success message for single video"
+  },
+  "msg_multi_added": {
+    "message": "Added $COUNT$ videos to your NotebookLM notebook!",
+    "description": "Success message for batch",
+    "placeholders": { "count": { "content": "$1", "example": "23" } }
+  },
+  "msg_importing_background": {
+    "message": "Importing $COUNT$ videos in background... You can close this popup.",
+    "description": "Message when batch import starts in background",
+    "placeholders": { "count": { "content": "$1", "example": "23" } }
+  },
+
+  "popup_title": {
+    "message": "VideoLM",
+    "description": "Popup heading"
+  },
+  "popup_subtitle": {
+    "message": "AI Video to NotebookLM",
+    "description": "Popup subheading"
+  },
+  "popup_settings": {
+    "message": "Settings",
+    "description": "Settings button tooltip"
+  },
+  "popup_loading_video": {
+    "message": "Loading video info...",
+    "description": "Loading state for video pages"
+  },
+  "popup_extracting_urls": {
+    "message": "Extracting video URLs...",
+    "description": "Loading state for batch pages"
+  },
+  "popup_cannot_import": {
+    "message": "Cannot import",
+    "description": "Error state title"
+  },
+  "popup_imported_success": {
+    "message": "Imported successfully!",
+    "description": "Generic success message"
+  },
+  "popup_import_failed": {
+    "message": "Import failed.",
+    "description": "Generic failure message"
+  },
+  "popup_batch_resume": {
+    "message": "Previous batch import has $COUNT$ videos remaining ($TITLE$).",
+    "description": "Batch resume prompt",
+    "placeholders": {
+      "count": { "content": "$1", "example": "50" },
+      "title": { "content": "$2", "example": "My Playlist" }
+    }
+  },
+  "popup_resume_import": {
+    "message": "Resume Import",
+    "description": "Resume batch button"
+  },
+  "popup_dismiss": {
+    "message": "Dismiss",
+    "description": "Dismiss button"
+  },
+  "popup_no_subtitles": {
+    "message": "This video has no subtitles available. Transcript-based modes require subtitles (CC). Try Quick Import or a video with the CC icon enabled.",
+    "description": "Warning when video has no CC"
+  },
+
+  "batch_size_warning": {
+    "message": "NotebookLM supports up to $LIMIT$ sources per notebook. This $TYPE$ has $COUNT$ videos.",
+    "description": "Batch size warning",
+    "placeholders": {
+      "limit": { "content": "$1", "example": "50" },
+      "type": { "content": "$2", "example": "playlist" },
+      "count": { "content": "$3", "example": "120" }
+    }
+  },
+  "batch_import_first": {
+    "message": "Import first $COUNT$ only",
+    "description": "Button to import first N videos",
+    "placeholders": { "count": { "content": "$1", "example": "50" } }
+  },
+  "batch_auto_split": {
+    "message": "Auto-split into $COUNT$ notebooks",
+    "description": "Button to auto-split",
+    "placeholders": { "count": { "content": "$1", "example": "3" } }
+  },
+  "batch_import_all": {
+    "message": "Import $COUNT$ Videos to NotebookLM",
+    "description": "Button to import all videos",
+    "placeholders": { "count": { "content": "$1", "example": "23" } }
+  },
+
+  "video_type_playlist": { "message": "Playlist" },
+  "video_type_channel": { "message": "Channel" },
+  "video_type_search": { "message": "Search Results" },
+  "video_count_found": {
+    "message": "$COUNT$ videos found",
+    "placeholders": { "count": { "content": "$1", "example": "23" } }
+  },
+  "video_hint_scroll": {
+    "message": "Scroll down on YouTube to load more videos, then reopen VideoLM.",
+    "description": "Hint to scroll for more videos"
+  },
+  "video_chapters": {
+    "message": "$COUNT$ chapters",
+    "placeholders": { "count": { "content": "$1", "example": "5" } }
+  },
+  "video_subtitles_yes": { "message": "✓ subtitles" },
+  "video_subtitles_no": { "message": "no subtitles" },
+
+  "import_btn_label": { "message": "Import to NotebookLM" },
+  "import_remaining": {
+    "message": "$COUNT$ imports remaining",
+    "placeholders": { "count": { "content": "$1", "example": "95" } }
+  },
+
+  "mode_label": { "message": "Import Mode" },
+  "mode_quick": { "message": "Quick Import (URL)" },
+  "mode_quick_desc": { "message": "Send YouTube URL directly to NotebookLM" },
+  "mode_raw": { "message": "Raw Transcript" },
+  "mode_structured": { "message": "AI Structured" },
+  "mode_summary": { "message": "AI Summary" },
+  "mode_chapters": { "message": "Chapter Split" },
+  "mode_needs_ai": { "message": "Needs API Key or Pro" },
+
+  "notebook_choice_title": { "message": "Existing notebook found" },
+  "notebook_choice_sources": {
+    "message": "$COUNT$ sources",
+    "placeholders": { "count": { "content": "$1", "example": "35" } }
+  },
+  "notebook_choice_slots": {
+    "message": "$COUNT$ slots available",
+    "placeholders": { "count": { "content": "$1", "example": "15" } }
+  },
+  "notebook_choice_merge": {
+    "message": "Merge ($COUNT$ videos)",
+    "placeholders": { "count": { "content": "$1", "example": "23" } }
+  },
+  "notebook_choice_create": { "message": "Create New" },
+  "notebook_choice_overflow": {
+    "message": "Overflow videos will auto-create \"$TITLE$ - Part 2\"",
+    "placeholders": { "title": { "content": "$1", "example": "My Playlist" } }
+  },
+
+  "dup_title": { "message": "Duplicate detected" },
+  "dup_message": {
+    "message": "A source with a similar title already exists: \"$TITLE$\"",
+    "placeholders": { "title": { "content": "$1", "example": "My Video" } }
+  },
+  "dup_overwrite": { "message": "Overwrite" },
+  "dup_save_new": { "message": "Save as New" },
+  "dup_skip": { "message": "Skip" },
+
+  "settings_title": { "message": "Settings" },
+  "settings_provider": { "message": "AI Provider" },
+  "settings_provider_openai": { "message": "OpenAI" },
+  "settings_provider_anthropic": { "message": "Anthropic" },
+  "settings_api_key": { "message": "API Key" },
+  "settings_model": { "message": "Model (optional)" },
+  "settings_dup_strategy": { "message": "When a same-name notebook exists" },
+  "settings_dup_ask": { "message": "Ask me each time" },
+  "settings_dup_merge": { "message": "Merge into existing notebook" },
+  "settings_dup_create": { "message": "Always create new notebook" },
+  "settings_dup_global": { "message": "Smart global dedup" },
+  "settings_api_hint": { "message": "Your API key is stored locally and never sent to our servers." },
+  "settings_saved": { "message": "Saved!" },
+  "settings_save": { "message": "Save" },
+
+  "notion_btn_copy": { "message": "Copy for Notion" },
+  "notion_btn_copying": { "message": "Copying..." },
+  "notion_opt_callout": { "message": "Include video info callout" },
+  "notion_opt_checkboxes": { "message": "Convert to action items" },
+  "notion_opt_timestamps": { "message": "Link citations to timestamps" },
+  "notion_copied_success": {
+    "message": "Copied! $RESOLVED$/$TOTAL$ citations linked ✓",
+    "description": "Success message after Notion copy",
+    "placeholders": {
+      "resolved": { "content": "$1", "example": "3" },
+      "total": { "content": "$2", "example": "5" }
+    }
+  },
+  "notion_copied_no_citations": { "message": "Copied to clipboard ✓" },
+  "notion_copy_failed": { "message": "Copy failed — please try again" },
+  "notion_section_title": { "message": "Notion Export" },
+  "notion_no_content": { "message": "Import a video first to enable Notion export" }
+}

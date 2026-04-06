@@ -1,0 +1,260 @@
+{
+  "ext_name": { "message": "VideoLM — AI 影片匯入 NotebookLM" },
+  "ext_description": { "message": "一鍵將 YouTube 影片、播放清單及頻道匯入 NotebookLM。支援智慧去重與自動分批。" },
+
+  "common_importing": { "message": "匯入中..." },
+  "common_processing": { "message": "處理中..." },
+  "common_back": { "message": "← 返回" },
+  "common_pro_badge": { "message": "PRO" },
+
+  "btn_notebooklm": { "message": "NotebookLM" },
+  "btn_extracting": { "message": "擷取中..." },
+  "btn_no_videos": { "message": "找不到影片" },
+  "btn_importing_count": {
+    "message": "匯入 $COUNT$ 個中...",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+
+  "toast_importing_video": {
+    "message": "正在匯入「$TITLE$」...",
+    "placeholders": { "title": { "content": "$1" } }
+  },
+  "toast_processing_videos": {
+    "message": "正在處理 $COUNT$ 個影片...",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "toast_processing_search": {
+    "message": "正在處理 $COUNT$ 個搜尋結果...",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "toast_no_videos": { "message": "此頁面找不到影片" },
+  "toast_no_videos_scroll": { "message": "找不到影片，請先向下捲動載入更多結果後再試。" },
+  "toast_extension_updated": { "message": "擴充功能已更新，請重新整理頁面" },
+  "toast_connecting": { "message": "正在連線 NotebookLM..." },
+  "toast_submitting": {
+    "message": "正在提交 $COUNT$ 個影片...",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "toast_nlm_processing": { "message": "NotebookLM 處理中..." },
+  "toast_importing_count": {
+    "message": "正在匯入 $COUNT$ 個影片...",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "toast_importing_to_notebook": {
+    "message": "正在匯入 $COUNT$ 個影片到「$NAME$」...",
+    "placeholders": {
+      "count": { "content": "$1" },
+      "name": { "content": "$2" }
+    }
+  },
+  "toast_merging_part": {
+    "message": "正在合併至 Part $PART$... ($DONE$/$TOTAL$)",
+    "placeholders": {
+      "part": { "content": "$1" },
+      "done": { "content": "$2" },
+      "total": { "content": "$3" }
+    }
+  },
+  "toast_creating_part": {
+    "message": "正在建立 Part $PART$... ($DONE$/$TOTAL$)",
+    "placeholders": {
+      "part": { "content": "$1" },
+      "done": { "content": "$2" },
+      "total": { "content": "$3" }
+    }
+  },
+  "toast_importing_to_part": {
+    "message": "正在匯入至 Part $PART$... ($DONE$/$TOTAL$)",
+    "placeholders": {
+      "part": { "content": "$1" },
+      "done": { "content": "$2" },
+      "total": { "content": "$3" }
+    }
+  },
+  "toast_import_failed": {
+    "message": "匯入失敗：$ERROR$",
+    "placeholders": { "error": { "content": "$1" } }
+  },
+  "toast_import_failed_short": { "message": "匯入失敗" },
+  "toast_single_imported": {
+    "message": "「$TITLE$」已匯入！",
+    "placeholders": { "title": { "content": "$1" } }
+  },
+  "toast_multi_imported": {
+    "message": "已匯入 $COUNT$ 個影片 —「$TITLE$」",
+    "placeholders": {
+      "count": { "content": "$1" },
+      "title": { "content": "$2" }
+    }
+  },
+  "toast_video_already_imported": { "message": "此影片已匯入過，略過重複匯入" },
+  "toast_already_imported_detail": {
+    "message": "「$TITLE$」已匯入過 — 已略過",
+    "placeholders": { "title": { "content": "$1" } }
+  },
+  "toast_all_exist": {
+    "message": "全部 $COUNT$ 個影片已存在於筆記本中",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "toast_all_exist_in_notebook": {
+    "message": "全部 $COUNT$ 個影片已存在於「$NAME$」中",
+    "placeholders": {
+      "count": { "content": "$1" },
+      "name": { "content": "$2" }
+    }
+  },
+  "toast_no_new_videos": { "message": "沒有新影片需要匯入" },
+  "toast_reimport_btn": { "message": "重新匯入 →" },
+
+  "notif_import_complete": { "message": "VideoLM 匯入完成" },
+  "notif_error_title": { "message": "VideoLM 錯誤" },
+
+  "error_quota_exceeded": { "message": "已超過每月匯入配額。" },
+  "error_ai_requires_key": { "message": "AI 處理需要 API 金鑰或 VideoLM Pro。" },
+  "error_no_urls": { "message": "未提供任何 URL。" },
+  "error_cannot_autocreate": { "message": "無法自動建立筆記本，請先開啟 NotebookLM 再試一次。" },
+  "error_no_notebook": { "message": "找不到筆記本，請先開啟 NotebookLM 或重新嘗試。" },
+  "error_cannot_connect": { "message": "無法連線 NotebookLM，請確認登入狀態。" },
+  "error_cannot_read_video": { "message": "無法讀取影片資料，請重新整理頁面。" },
+  "error_api_failed": { "message": "API 匯入失敗。" },
+
+  "msg_single_added": { "message": "YouTube 影片已加入 NotebookLM 筆記本！" },
+  "msg_multi_added": {
+    "message": "已將 $COUNT$ 個影片加入 NotebookLM 筆記本！",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "msg_importing_background": {
+    "message": "正在背景匯入 $COUNT$ 個影片... 可以關閉此彈出視窗。",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+
+  "popup_title": { "message": "VideoLM" },
+  "popup_subtitle": { "message": "AI 影片匯入 NotebookLM" },
+  "popup_settings": { "message": "設定" },
+  "popup_loading_video": { "message": "正在載入影片資訊..." },
+  "popup_extracting_urls": { "message": "正在擷取影片 URL..." },
+  "popup_cannot_import": { "message": "無法匯入" },
+  "popup_imported_success": { "message": "匯入成功！" },
+  "popup_import_failed": { "message": "匯入失敗。" },
+  "popup_batch_resume": {
+    "message": "先前的批次匯入還有 $COUNT$ 個影片未完成（$TITLE$）。",
+    "placeholders": {
+      "count": { "content": "$1" },
+      "title": { "content": "$2" }
+    }
+  },
+  "popup_resume_import": { "message": "繼續匯入" },
+  "popup_dismiss": { "message": "忽略" },
+  "popup_no_subtitles": { "message": "此影片沒有字幕。需要字幕（CC）才能使用逐字稿模式，請改用「快速匯入」或選擇有字幕的影片。" },
+
+  "batch_size_warning": {
+    "message": "NotebookLM 每個筆記本最多 $LIMIT$ 個來源，此$TYPE$有 $COUNT$ 個影片。",
+    "placeholders": {
+      "limit": { "content": "$1" },
+      "type": { "content": "$2" },
+      "count": { "content": "$3" }
+    }
+  },
+  "batch_import_first": {
+    "message": "僅匯入前 $COUNT$ 個",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "batch_auto_split": {
+    "message": "自動分為 $COUNT$ 個筆記本",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "batch_import_all": {
+    "message": "匯入 $COUNT$ 個影片至 NotebookLM",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+
+  "video_type_playlist": { "message": "播放清單" },
+  "video_type_channel": { "message": "頻道" },
+  "video_type_search": { "message": "搜尋結果" },
+  "video_count_found": {
+    "message": "找到 $COUNT$ 個影片",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "video_hint_scroll": { "message": "請在 YouTube 向下捲動載入更多影片，然後重新開啟 VideoLM。" },
+  "video_chapters": {
+    "message": "$COUNT$ 個章節",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "video_subtitles_yes": { "message": "✓ 有字幕" },
+  "video_subtitles_no": { "message": "無字幕" },
+
+  "import_btn_label": { "message": "匯入至 NotebookLM" },
+  "import_remaining": {
+    "message": "剩餘 $COUNT$ 次匯入",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+
+  "mode_label": { "message": "匯入模式" },
+  "mode_quick": { "message": "快速匯入 (URL)" },
+  "mode_quick_desc": { "message": "直接將 YouTube URL 傳送至 NotebookLM" },
+  "mode_raw": { "message": "原始逐字稿" },
+  "mode_structured": { "message": "AI 結構化" },
+  "mode_summary": { "message": "AI 摘要" },
+  "mode_chapters": { "message": "章節拆分" },
+  "mode_needs_ai": { "message": "需要 API 金鑰或 Pro" },
+
+  "notebook_choice_title": { "message": "發現現有筆記本" },
+  "notebook_choice_sources": {
+    "message": "$COUNT$ 個來源",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "notebook_choice_slots": {
+    "message": "剩餘 $COUNT$ 個空位",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "notebook_choice_merge": {
+    "message": "合併（$COUNT$ 個影片）",
+    "placeholders": { "count": { "content": "$1" } }
+  },
+  "notebook_choice_create": { "message": "建立新的" },
+  "notebook_choice_overflow": {
+    "message": "超出的影片會自動建立「$TITLE$ - Part 2」",
+    "placeholders": { "title": { "content": "$1" } }
+  },
+
+  "dup_title": { "message": "偵測到重複" },
+  "dup_message": {
+    "message": "已存在相似標題的來源：「$TITLE$」",
+    "placeholders": { "title": { "content": "$1" } }
+  },
+  "dup_overwrite": { "message": "覆寫" },
+  "dup_save_new": { "message": "另存新檔" },
+  "dup_skip": { "message": "略過" },
+
+  "settings_title": { "message": "設定" },
+  "settings_provider": { "message": "AI 提供者" },
+  "settings_provider_openai": { "message": "OpenAI" },
+  "settings_provider_anthropic": { "message": "Anthropic" },
+  "settings_api_key": { "message": "API 金鑰" },
+  "settings_model": { "message": "模型（選填）" },
+  "settings_dup_strategy": { "message": "同名筆記本存在時" },
+  "settings_dup_ask": { "message": "每次詢問" },
+  "settings_dup_merge": { "message": "合併至現有筆記本" },
+  "settings_dup_create": { "message": "總是建立新筆記本" },
+  "settings_dup_global": { "message": "智慧全域去重" },
+  "settings_api_hint": { "message": "API 金鑰僅儲存於本機，不會傳送至任何伺服器。" },
+  "settings_saved": { "message": "已儲存！" },
+  "settings_save": { "message": "儲存" },
+
+  "notion_btn_copy": { "message": "複製到 Notion" },
+  "notion_btn_copying": { "message": "複製中..." },
+  "notion_opt_callout": { "message": "加入影片資訊卡片" },
+  "notion_opt_checkboxes": { "message": "轉換為待辦清單" },
+  "notion_opt_timestamps": { "message": "引文連結至時間戳" },
+  "notion_copied_success": {
+    "message": "已複製！$RESOLVED$/$TOTAL$ 個引文已連結 ✓",
+    "placeholders": {
+      "resolved": { "content": "$1", "example": "3" },
+      "total": { "content": "$2", "example": "5" }
+    }
+  },
+  "notion_copied_no_citations": { "message": "已複製到剪貼簿 ✓" },
+  "notion_copy_failed": { "message": "複製失敗 — 請重試" },
+  "notion_section_title": { "message": "Notion 匯出" },
+  "notion_no_content": { "message": "請先匯入影片以啟用 Notion 匯出" }
+}

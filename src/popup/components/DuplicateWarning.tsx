@@ -1,4 +1,5 @@
 import React from 'react';
+import { t } from '@/utils/i18n';
 
 export type DuplicateAction = 'overwrite' | 'new' | 'skip';
 
@@ -10,14 +11,14 @@ interface DuplicateWarningProps {
 export function DuplicateWarning({ existingTitle, onAction }: DuplicateWarningProps) {
   return (
     <div className="duplicate-warning">
-      <div className="duplicate-warning__title">Duplicate detected</div>
+      <div className="duplicate-warning__title">{t('dup_title')}</div>
       <div className="duplicate-warning__message">
-        A source with a similar title already exists: &ldquo;{existingTitle}&rdquo;
+        {t('dup_message', [existingTitle])}
       </div>
       <div className="duplicate-warning__actions">
-        <button onClick={() => onAction('overwrite')}>Overwrite</button>
-        <button onClick={() => onAction('new')}>Save as New</button>
-        <button onClick={() => onAction('skip')}>Skip</button>
+        <button onClick={() => onAction('overwrite')}>{t('dup_overwrite')}</button>
+        <button onClick={() => onAction('new')}>{t('dup_save_new')}</button>
+        <button onClick={() => onAction('skip')}>{t('dup_skip')}</button>
       </div>
     </div>
   );

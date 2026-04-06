@@ -19,9 +19,9 @@
 export interface ToastOptions {
   /** 'importing' | 'success' | 'error' */
   state: 'importing' | 'success' | 'error';
-  /** Main text to display (Chinese) */
+  /** Main text to display */
   text: string;
-  /** Secondary text line (English) — shown below main text in smaller font */
+  /** Secondary text line — shown below main text in smaller font */
   subtext?: string;
   /** Progress 0-100 (only for 'importing' state) */
   progress?: number;
@@ -29,7 +29,63 @@ export interface ToastOptions {
   viewUrl?: string;
   /** Auto-dismiss after N ms (default: 6000 for success/error, never for importing) */
   dismissAfter?: number;
+  /** Action button label (e.g. "Re-import") */
+  actionLabel?: string;
+  /** Message type sent to SW when action button is clicked */
+  actionMessage?: Record<string, unknown>;
 }
+
+// ---------------------------------------------------------------------------
+// Styles (injected into Shadow DOM — fully isolated from YouTube CSS)
+// NEW-1 FIX: Moved before ensureShadowHost to avoid TDZ risk
+// ---------------------------------------------------------------------------
+const TOAST_STYLES = `
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 2147483647;
+    border: 1px solid;
+    border-radius: 12px;
+    padding: 12px 16px;
+    min-width: 280px;
+    max-width: 400px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    backdrop-filter: blur(12px);
+    pointer-events: auto;
+  }
+  .toast-in { animation: toast-in 0.3s ease forwards; }
+  .toast-out { animation: toast-out 0.3s ease forwards; }
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(20px) scale(0.95); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes toast-out {
+    from { opacity: 1; transform: translateY(0) scale(1); }
+    to   { opacity: 0; transform: translateY(20px) scale(0.95); }
+  }
+  .toast-row { display: flex; align-items: center; justify-content: space-between; }
+  .toast-icon { font-size: 16px; margin-right: 8px; flex-shrink: 0; }
+  .toast-text-wrap { overflow: hidden; min-width: 0; flex: 1; }
+  .toast-main-text { font-size: 13px; color: #e8eaed; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toast-sub-text { font-size: 11px; color: #9aa0a6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+  .toast-actions { display: flex; align-items: center; flex-shrink: 0; }
+  .toast-view-link { text-decoration: none; font-weight: 600; margin-left: 12px; white-space: nowrap; font-size: 13px; }
+  .toast-close { cursor: pointer; margin-left: 8px; opacity: 0.6; font-size: 14px; line-height: 1; color: #e8eaed; }
+  .toast-close:hover { opacity: 1; }
+  .toast-action-btn {
+    cursor: pointer;
+    margin-left: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #8ab4f8;
+    white-space: nowrap;
+    opacity: 0.9;
+  }
+  .toast-action-btn:hover { opacity: 1; text-decoration: underline; }
+  .toast-bar-bg { width: 100%; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+  .toast-bar-fill { height: 100%; border-radius: 2px; transition: width 0.3s ease; }
+`;
 
 // ---------------------------------------------------------------------------
 // Shadow DOM setup
@@ -144,6 +200,20 @@ export function showToast(opts: ToastOptions): void {
     actions.appendChild(viewLink);
   }
 
+  // Action button (e.g. "Re-import" for dedup-skipped items)
+  if (opts.actionLabel && opts.actionMessage) {
+    const actionBtn = document.createElement('span');
+    actionBtn.className = 'toast-action-btn';
+    actionBtn.textContent = opts.actionLabel;
+    actionBtn.style.pointerEvents = 'auto';
+    const msg = opts.actionMessage;
+    actionBtn.addEventListener('click', () => {
+      dismissToast();
+      try { chrome.runtime.sendMessage(msg); } catch { /* ignore */ }
+    });
+    actions.appendChild(actionBtn);
+  }
+
   const closeBtn = document.createElement('span');
   closeBtn.className = 'toast-close';
   closeBtn.textContent = '✕';
@@ -183,7 +253,8 @@ export function dismissToast(): void {
   if (!toast) return;
 
   toast.className = 'toast toast-out';
-  setTimeout(() => toast.remove(), 300);
+  // L-6 FIX: Guard against double-remove — check parent before removing
+  setTimeout(() => { if (toast.parentNode) toast.remove(); }, 300);
 
   if (autoDismissTimer) {
     clearTimeout(autoDismissTimer);
@@ -218,107 +289,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 // ---------------------------------------------------------------------------
 // Expose to other content scripts in the same ISOLATED world
+// M-2 FIX: Use Symbol.for() keys — prevents accidental collision with page scripts
 // (youtube.ts can call these directly for instant button feedback)
 // ---------------------------------------------------------------------------
-(window as any).__videolm_showToast = showToast;
-(window as any).__videolm_dismissToast = dismissToast;
+(window as any)[Symbol.for('videolm_showToast')] = showToast;
+(window as any)[Symbol.for('videolm_dismissToast')] = dismissToast;
 
-// ---------------------------------------------------------------------------
-// Styles (injected into Shadow DOM — fully isolated from YouTube CSS)
-// ---------------------------------------------------------------------------
-const TOAST_STYLES = `
-  .toast {
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    z-index: 2147483647;
-    border: 1px solid;
-    border-radius: 12px;
-    padding: 12px 16px;
-    min-width: 280px;
-    max-width: 400px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    backdrop-filter: blur(12px);
-    pointer-events: auto;
-  }
-  .toast-in {
-    animation: toast-in 0.3s ease forwards;
-  }
-  .toast-out {
-    animation: toast-out 0.3s ease forwards;
-  }
-  @keyframes toast-in {
-    from { opacity: 0; transform: translateY(20px) scale(0.95); }
-    to   { opacity: 1; transform: translateY(0) scale(1); }
-  }
-  @keyframes toast-out {
-    from { opacity: 1; transform: translateY(0) scale(1); }
-    to   { opacity: 0; transform: translateY(20px) scale(0.95); }
-  }
-  .toast-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .toast-icon {
-    font-size: 16px;
-    margin-right: 8px;
-    flex-shrink: 0;
-  }
-  .toast-text-wrap {
-    overflow: hidden;
-    min-width: 0;
-    flex: 1;
-  }
-  .toast-main-text {
-    font-size: 13px;
-    color: #e8eaed;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .toast-sub-text {
-    font-size: 11px;
-    color: #9aa0a6;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    margin-top: 2px;
-  }
-  .toast-actions {
-    display: flex;
-    align-items: center;
-    flex-shrink: 0;
-  }
-  .toast-view-link {
-    text-decoration: none;
-    font-weight: 600;
-    margin-left: 12px;
-    white-space: nowrap;
-    font-size: 13px;
-  }
-  .toast-close {
-    cursor: pointer;
-    margin-left: 8px;
-    opacity: 0.6;
-    font-size: 14px;
-    line-height: 1;
-    color: #e8eaed;
-  }
-  .toast-close:hover {
-    opacity: 1;
-  }
-  .toast-bar-bg {
-    width: 100%;
-    height: 4px;
-    background: rgba(255,255,255,0.1);
-    border-radius: 2px;
-    margin-top: 8px;
-    overflow: hidden;
-  }
-  .toast-bar-fill {
-    height: 100%;
-    border-radius: 2px;
-    transition: width 0.3s ease;
-  }
-`;
+// (TOAST_STYLES moved to top of file — NEW-1 FIX)

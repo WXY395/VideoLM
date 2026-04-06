@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import type { UserSettings, AIProviderType, BYOKConfig, DuplicateStrategy } from '@/types';
+import { t } from '@/utils/i18n';
 
 interface SettingsPageProps {
   settings: UserSettings;
@@ -40,28 +41,28 @@ export function SettingsPage({ settings, onSave, onBack }: SettingsPageProps) {
   return (
     <div className="settings-page">
       <button className="back-button" onClick={onBack}>
-        &larr; Back
+        {t('common_back')}
       </button>
 
-      <h2 className="settings-title">Settings</h2>
+      <h2 className="settings-title">{t('settings_title')}</h2>
 
       <div className="settings-section">
         <label className="settings-label" htmlFor="provider-select">
-          AI Provider
+          {t('settings_provider')}
         </label>
         <select
           id="provider-select"
           value={provider}
           onChange={(e) => setProvider(e.target.value as AIProviderType)}
         >
-          <option value="openai">OpenAI</option>
-          <option value="anthropic">Anthropic</option>
+          <option value="openai">{t('settings_provider_openai')}</option>
+          <option value="anthropic">{t('settings_provider_anthropic')}</option>
         </select>
       </div>
 
       <div className="settings-section">
         <label className="settings-label" htmlFor="api-key-input">
-          API Key
+          {t('settings_api_key')}
         </label>
         <input
           id="api-key-input"
@@ -74,7 +75,7 @@ export function SettingsPage({ settings, onSave, onBack }: SettingsPageProps) {
 
       <div className="settings-section">
         <label className="settings-label" htmlFor="model-input">
-          Model (optional)
+          {t('settings_model')}
         </label>
         <input
           id="model-input"
@@ -86,13 +87,13 @@ export function SettingsPage({ settings, onSave, onBack }: SettingsPageProps) {
       </div>
 
       <div className="settings-section">
-        <label className="settings-label">When a same-name notebook exists</label>
+        <label className="settings-label">{t('settings_dup_strategy')}</label>
         <div className="settings-radio-group">
           {([
-            ['ask', 'Ask me each time'],
-            ['merge', 'Merge into existing notebook'],
-            ['create', 'Always create new notebook'],
-          ] as const).map(([value, label]) => (
+            ['ask', 'settings_dup_ask'],
+            ['merge', 'settings_dup_merge'],
+            ['create', 'settings_dup_create'],
+          ] as const).map(([value, labelKey]) => (
             <label key={value} className="settings-radio">
               <input
                 type="radio"
@@ -101,7 +102,7 @@ export function SettingsPage({ settings, onSave, onBack }: SettingsPageProps) {
                 checked={dupStrategy === value}
                 onChange={() => setDupStrategy(value as DuplicateStrategy)}
               />
-              <span>{label}</span>
+              <span>{t(labelKey)}</span>
             </label>
           ))}
           <label className={`settings-radio ${settings.tier !== 'pro' ? 'settings-radio--disabled' : ''}`}>
@@ -113,18 +114,18 @@ export function SettingsPage({ settings, onSave, onBack }: SettingsPageProps) {
               onChange={() => setDupStrategy('global-dedup')}
               disabled={settings.tier !== 'pro'}
             />
-            <span>Smart global dedup</span>
-            {settings.tier !== 'pro' && <span className="settings-pro-badge">PRO</span>}
+            <span>{t('settings_dup_global')}</span>
+            {settings.tier !== 'pro' && <span className="settings-pro-badge">{t('common_pro_badge')}</span>}
           </label>
         </div>
       </div>
 
       <p className="settings-hint">
-        Your API key is stored locally and never sent to our servers.
+        {t('settings_api_hint')}
       </p>
 
       <button className="save-button" onClick={handleSave}>
-        {saved ? 'Saved!' : 'Save'}
+        {saved ? t('settings_saved') : t('settings_save')}
       </button>
     </div>
   );

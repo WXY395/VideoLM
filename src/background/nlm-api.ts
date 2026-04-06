@@ -25,7 +25,7 @@ function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 10
 // Session token helpers
 // ---------------------------------------------------------------------------
 
-async function fetchSessionTokens(authuser = ''): Promise<{ bl: string; atToken: string } | null> {
+export async function fetchSessionTokens(authuser = ''): Promise<{ bl: string; atToken: string } | null> {
   const authuserParam = authuser ? `?authuser=${authuser}&pageId=none` : '';
   try {
     const resp = await fetchWithTimeout(
@@ -232,16 +232,23 @@ export function findMatchingNotebooks(
   // CJK characters carry more meaning per char than Latin — use lower threshold
   // "小船" (2 CJK chars) is a unique channel name, but "AI" (2 Latin chars) could match anything
   const hasCJK = (s: string) => /[\u4e00-\u9fff\u3400-\u4dbf\uF900-\uFAFF]/.test(s);
-  const MIN_MATCH_LATIN = 5;
-  const MIN_MATCH_CJK = 2;
+  // M-10 FIX: Raise minimum match length to reduce false positives on short names
+  const MIN_MATCH_LATIN = 8;
+  const MIN_MATCH_CJK = 3;
 
   return notebooks
     .filter((nb) => {
       const normalizedNb = normalizeName(nb.name);
       if (!normalizedNb) return false;
-      const minLen = (hasCJK(normalizedNb) || hasCJK(normalizedTitle)) ? MIN_MATCH_CJK : MIN_MATCH_LATIN;
+      const isCJK = hasCJK(normalizedNb) || hasCJK(normalizedTitle);
+      const minLen = isCJK ? MIN_MATCH_CJK : MIN_MATCH_LATIN;
       if (normalizedNb.length < minLen) return false;
       if (normalizedTitle.length < minLen) return false;
+      // M-10 FIX: Only match if the SHORTER string is at least 60% of the LONGER
+      // This prevents "Daily" matching "Daily recipes from Japan cooking channel"
+      const shorter = Math.min(normalizedNb.length, normalizedTitle.length);
+      const longer = Math.max(normalizedNb.length, normalizedTitle.length);
+      if (shorter / longer < 0.4) return false;
       return normalizedNb.startsWith(normalizedTitle) || normalizedTitle.startsWith(normalizedNb);
     })
     // Prefer the notebook with most sources (main notebook before Part N)
