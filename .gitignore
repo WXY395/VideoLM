@@ -2,3 +2,6 @@ node_modules
 dist
 .vite
 *.local
+
+# Packaged extension zips (build artifacts; not source of truth)
+/videolm-v*.zip
