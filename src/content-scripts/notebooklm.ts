@@ -715,7 +715,26 @@ async function handleQuickFix(
     if (match.record?.url) {
       citationMap[String(csn.id)] = { url: match.record.url };
     }
-    console.log(`[VideoLM] QuickFix re-resolve ${csn.id}: "${csn.sourceName.slice(0, 30)}" → ${match.type} (${match.score.toFixed(2)})`);
+
+    // ── User-provided source override (confidence-based) ──
+    // If this citation matches the source the user just fixed, and algorithmic
+    // matching still failed, trust the user's explicit action over the algorithm.
+    // This prevents the resolution loop: ask → user provides → still not_found → ask again.
+    const key = String(csn.id);
+    console.log("SOURCE_OVERRIDE_APPLIED", {
+      key,
+      overridden: !citationMap[key]?.url,
+      hasExisting: !!citationMap[key]?.url
+    });
+    if (!citationMap[key]?.url && csn.sourceName === fixingSourceName) {
+      const confidence = match.type === 'matched' ? 'high'
+        : match.type === 'uncertain' ? 'medium'
+        : 'low';
+      citationMap[key] = { url };
+      console.log(`[VideoLM] QuickFix user-override ${csn.id}: "${csn.sourceName.slice(0, 30)}" → accepted (confidence: ${confidence})`);
+    } else {
+      console.log(`[VideoLM] QuickFix re-resolve ${csn.id}: "${csn.sourceName.slice(0, 30)}" → ${match.type} (${match.score.toFixed(2)})`);
+    }
   }
 
   // Fallback: DOM-extracted hrefs
