@@ -486,6 +486,7 @@ function showQuickFixPanel(
  */
 async function handleQuickFix(
   url: string,
+  fixingSourceName: string,
   allCitationSourceNames: Array<{ id: number; sourceName: string }>,
   protectedText: string,
   citationHints: Array<{ id: number; href?: string }>,
@@ -497,7 +498,7 @@ async function handleQuickFix(
   const videoId = extractVideoIdFromUrl(url);
   if (!videoId) return;
 
-  const record = createVideoSourceRecord(videoId, '', '', url);
+  const record = createVideoSourceRecord(videoId, fixingSourceName, '', url);
   await sendMsgAsync({ type: 'STORE_SOURCE_RECORD', record });
 
   // 2. Re-resolve ALL citations
@@ -530,12 +531,22 @@ async function handleQuickFix(
   await writeNotionToClipboard(plainText, html);
 
   // 4. Compute new missing/resolved state
-  const nowMissing = allCitationSourceNames.filter(
-    csn => !citationMap[String(csn.id)]?.url,
-  );
-  const nowResolved = allCitationSourceNames.filter(
-    csn => !!citationMap[String(csn.id)]?.url,
-  );
+  const nowMissing: Array<{ id: number; sourceName: string }> = [];
+  const seenMissing = new Set<string>();
+  for (const csn of allCitationSourceNames) {
+    if (citationMap[String(csn.id)]?.url) continue;
+    if (seenMissing.has(csn.sourceName)) continue;
+    seenMissing.add(csn.sourceName);
+    nowMissing.push({ id: csn.id, sourceName: csn.sourceName });
+  }
+  const nowResolved: Array<{ id: number; sourceName: string }> = [];
+  const seenResolved = new Set<string>();
+  for (const csn of allCitationSourceNames) {
+    if (!citationMap[String(csn.id)]?.url) continue;
+    if (seenResolved.has(csn.sourceName)) continue;
+    seenResolved.add(csn.sourceName);
+    nowResolved.push({ id: csn.id, sourceName: csn.sourceName });
+  }
 
   // 5. Update UI
   if (nowMissing.length === 0) {
@@ -561,8 +572,8 @@ async function handleQuickFix(
       shadow,
       nowMissing,
       nowResolved,
-      (_, __, newUrl) => handleQuickFix(
-        newUrl, allCitationSourceNames, protectedText, citationHints, shadow, ctaLabel, host,
+      (_, sourceName, newUrl) => handleQuickFix(
+        newUrl, sourceName, allCitationSourceNames, protectedText, citationHints, shadow, ctaLabel, host,
       ),
       host,
     );
@@ -711,9 +722,14 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
       await writeNotionToClipboard(plainText, html);
 
       // ── STEP 6: Feedback — show resolution stats ──
-      const missingItems = citationSourceNames
-        .filter((csn: { id: number; sourceName: string }) => !citationMap[String(csn.id)])
-        .map((csn: { id: number; sourceName: string }) => ({ id: csn.id, sourceName: csn.sourceName }));
+      const missingItems: Array<{ id: number; sourceName: string }> = [];
+      const seenSourceNames = new Set<string>();
+      for (const csn of citationSourceNames) {
+        if (citationMap[String(csn.id)]) continue; // already resolved
+        if (seenSourceNames.has(csn.sourceName)) continue; // dedup
+        seenSourceNames.add(csn.sourceName);
+        missingItems.push({ id: csn.id, sourceName: csn.sourceName });
+      }
       const missingCount = missingItems.length;
 
       if (missingCount > 0) {
@@ -741,8 +757,9 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
             shadow,
             missingItems,
             [],
-            (_, __, url) => handleQuickFix(
+            (_, sourceName, url) => handleQuickFix(
               url,
+              sourceName,
               capturedCitationSourceNames,
               capturedProtectedText,
               capturedCitationHints,
