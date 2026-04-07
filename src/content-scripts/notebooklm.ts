@@ -30,6 +30,11 @@ import {
   type SuggestionResult,
 } from '@/utils/source-resolution';
 import { prepareNlmResponseForNotion, writeNotionToClipboard } from './copy-handler';
+
+/** Factory: fresh fallback entry for unresolved citations. Never shares object references. */
+function createFallbackEntry(): CitationMap[string] {
+  return { url: null, confidence: 'low', status: 'unresolved' };
+}
 import { isYouTubeUrl, extractVideoIdFromUrl } from '@/utils/url-sanitizer';
 
 let fetchInterceptor: FetchInterceptor | null = null;
@@ -746,10 +751,11 @@ async function handleQuickFix(
   }
 
   // Ensure every citation ID has an entry — unresolved get fallback
+  // MUST run after all resolution passes; NEVER overrides existing entries
   for (const csn of allCitationSourceNames) {
     const key = String(csn.id);
-    if (!citationMap[key]) {
-      citationMap[key] = { url: null, confidence: 'low', status: 'unresolved' };
+    if (citationMap[key] === undefined) {
+      citationMap[key] = createFallbackEntry();
     }
   }
 
@@ -939,10 +945,11 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
       }
 
       // Ensure every citation ID has an entry — unresolved get fallback
+      // MUST run after all resolution passes; NEVER overrides existing entries
       for (const csn of citationSourceNames) {
         const key = String(csn.id);
-        if (!citationMap[key]) {
-          citationMap[key] = { url: null, confidence: 'low', status: 'unresolved' };
+        if (citationMap[key] === undefined) {
+          citationMap[key] = createFallbackEntry();
         }
       }
 

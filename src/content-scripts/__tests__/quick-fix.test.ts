@@ -95,9 +95,10 @@ describe('Quick Fix data flow', () => {
       }
 
       // Ensure every citation ID has an entry — unresolved get fallback
+      // NEVER overrides existing entries
       for (const csn of citations) {
         const key = String(csn.id);
-        if (!citationMap[key]) {
+        if (citationMap[key] === undefined) {
           citationMap[key] = { url: null, confidence: 'low', status: 'unresolved' };
         }
       }
@@ -284,16 +285,50 @@ describe('Quick Fix data flow', () => {
         }
       }
 
-      // Ensure every citation ID has an entry
+      // Ensure every citation ID has an entry — NEVER overrides existing
       for (const csn of citations) {
         const key = String(csn.id);
-        if (!citationMap[key]) {
+        if (citationMap[key] === undefined) {
           citationMap[key] = { url: null, confidence: 'low', status: 'unresolved' };
         }
       }
 
       return citationMap;
     }
+
+    it('existing url must never be replaced by fallback', () => {
+      const record = createVideoSourceRecord(
+        'v1', 'Claude AI 教學', 'Ch', 'https://youtube.com/watch?v=v1',
+      );
+      const citations = [
+        { id: 1, sourceName: 'Claude AI 教學' },
+        { id: 2, sourceName: '無法匹配的來源' },
+      ];
+
+      const citationMap = buildCompleteCitationMap(citations, [record]);
+
+      // id 1: algorithm-resolved → must keep original url, NOT null
+      expect(citationMap['1'].url).toBe('https://youtube.com/watch?v=v1');
+      expect(citationMap['1'].confidence).toBe('high');
+      expect(citationMap['1'].status).toBe('resolved');
+
+      // id 2: unresolved → gets fallback
+      expect(citationMap['2'].url).toBeNull();
+      expect(citationMap['2'].confidence).toBe('low');
+      expect(citationMap['2'].status).toBe('unresolved');
+
+      // Run fallback sweep AGAIN to prove idempotency — must not overwrite
+      for (const csn of citations) {
+        const key = String(csn.id);
+        if (citationMap[key] === undefined) {
+          citationMap[key] = { url: null, confidence: 'low', status: 'unresolved' };
+        }
+      }
+
+      // id 1 still intact after second sweep
+      expect(citationMap['1'].url).toBe('https://youtube.com/watch?v=v1');
+      expect(citationMap['1'].confidence).toBe('high');
+    });
 
     it('should not produce missing citationMap entry', () => {
       const record = createVideoSourceRecord(
