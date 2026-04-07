@@ -760,26 +760,30 @@ async function handleQuickFix(
   const html = finalizeForNotionHtml(transportBlock, citationMap, decodeOpts);
   await writeNotionToClipboard(plainText, html);
 
-  // 4. Compute new missing/resolved state
-  const nowMissing: Array<{ id: number; sourceName: string }> = [];
-  const seenMissing = new Set<string>();
+  // 4. Compute new low-confidence / resolved state
+  const nowLowConfidence: Array<{ id: number; sourceName: string }> = [];
+  const seenLow = new Set<string>();
   for (const csn of allCitationSourceNames) {
-    if (citationMap[String(csn.id)]?.url) continue;
-    if (seenMissing.has(csn.sourceName)) continue;
-    seenMissing.add(csn.sourceName);
-    nowMissing.push({ id: csn.id, sourceName: csn.sourceName });
+    const entry = citationMap[String(csn.id)];
+    const confidence = entry?.confidence ?? 'low';
+    if (confidence === 'high' || confidence === 'medium') continue;
+    if (seenLow.has(csn.sourceName)) continue;
+    seenLow.add(csn.sourceName);
+    nowLowConfidence.push({ id: csn.id, sourceName: csn.sourceName });
   }
   const nowResolved: Array<{ id: number; sourceName: string }> = [];
   const seenResolved = new Set<string>();
   for (const csn of allCitationSourceNames) {
-    if (!citationMap[String(csn.id)]?.url) continue;
+    const entry = citationMap[String(csn.id)];
+    const confidence = entry?.confidence ?? 'low';
+    if (confidence !== 'high' && confidence !== 'medium') continue;
     if (seenResolved.has(csn.sourceName)) continue;
     seenResolved.add(csn.sourceName);
     nowResolved.push({ id: csn.id, sourceName: csn.sourceName });
   }
 
   // 5. Update UI
-  if (nowMissing.length === 0) {
+  if (nowLowConfidence.length === 0) {
     closeQuickFixPanel(true);
     // Clean up CTA handler
     if (ctaClickAbort) { ctaClickAbort.abort(); ctaClickAbort = null; }
@@ -792,7 +796,7 @@ async function handleQuickFix(
       btn.classList.remove('vlm-notion-btn--success');
     }, 2000);
   } else {
-    ctaLabel.textContent = `\u26A0 ${nowMissing.length} \u500B\u4F86\u6E90\u7F3A\u5931 \u25BE`;
+    ctaLabel.textContent = `\u26A0 ${nowLowConfidence.length} \u500B\u4F86\u6E90\u7F3A\u5931 \u25BE`;
 
     const oldPanel = shadow.querySelector('.vlm-qf-panel');
     if (oldPanel) oldPanel.remove();
@@ -800,7 +804,7 @@ async function handleQuickFix(
 
     showQuickFixPanel(
       shadow,
-      nowMissing,
+      nowLowConfidence,
       nowResolved,
       (_, sourceName, newUrl) => handleQuickFix(
         newUrl, sourceName, allCitationSourceNames, protectedText, citationHints, shadow, ctaLabel, host,
@@ -964,23 +968,26 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
       await writeNotionToClipboard(plainText, html);
 
       // ── STEP 6: Feedback — show resolution stats ──
-      const missingItems: Array<{ id: number; sourceName: string }> = [];
+      // Success = all citations have high or medium confidence
+      // Low confidence → needs Quick Fix (even if entry exists)
+      const lowConfidenceItems: Array<{ id: number; sourceName: string }> = [];
       const seenSourceNames = new Set<string>();
       for (const csn of citationSourceNames) {
-        if (citationMap[String(csn.id)]) continue; // already resolved
+        const entry = citationMap[String(csn.id)];
+        const confidence = entry?.confidence ?? 'low';
+        if (confidence === 'high' || confidence === 'medium') continue;
         if (seenSourceNames.has(csn.sourceName)) continue; // dedup
         seenSourceNames.add(csn.sourceName);
-        missingItems.push({ id: csn.id, sourceName: csn.sourceName });
+        lowConfidenceItems.push({ id: csn.id, sourceName: csn.sourceName });
       }
-      const missingCount = missingItems.length;
+      const missingCount = lowConfidenceItems.length;
 
       if (missingCount > 0) {
 
         labelSpan.textContent = `\u26A0 ${missingCount} \u500B\u4F86\u6E90\u7F3A\u5931 \u25BE`;
         btn.classList.add('vlm-notion-btn--warning');
 
-        const missingNames = citationSourceNames
-          .filter((csn: { id: number; sourceName: string }) => !citationMap[String(csn.id)])
+        const missingNames = lowConfidenceItems
           .map((csn: { id: number; sourceName: string }) => csn.sourceName.slice(0, 40));
         console.warn(`[VideoLM] ${missingCount} citation(s) missing. Sources not in index:`, [...new Set(missingNames)]);
         console.warn('[VideoLM] Fix: Quick Import these videos or use the Quick Fix panel.');
@@ -998,7 +1005,7 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
 
           showQuickFixPanel(
             shadow,
-            missingItems,
+            lowConfidenceItems,
             [],
             (_, sourceName, url) => handleQuickFix(
               url,
