@@ -53,12 +53,16 @@ const CITATION_MAP_COMMENT_RE = /\n?<!--\s*CITATION_MAP[\s\S]*?-->\s*$/i;
 /** Structured map: id → resolved YouTube URL (+ optional timestamp in seconds) */
 export type CitationConfidence = 'high' | 'medium' | 'low';
 
+export type CitationStatus = 'resolved' | 'unresolved';
+
 export type CitationMap = {
   [id: string]: {
-    url: string;
+    url: string | null;
     timestamp?: number;
     /** Resolution confidence: high = algorithm, medium = user override, low = unresolved/fallback */
     confidence?: CitationConfidence;
+    /** Whether the citation was successfully resolved or remains unresolved */
+    status?: CitationStatus;
   };
 };
 
@@ -449,6 +453,8 @@ export function assertCompleteCitationMap(text: string, map: CitationMap): void 
     if (seen.has(key)) continue;
     seen.add(key);
     const entry = map[key];
+    // Entries with status 'unresolved' are expected — skip validation
+    if (entry?.status === 'unresolved') continue;
     if (!entry?.url?.length) {
       console.error(
         `[VideoLM] Incomplete CitationMap: missing or empty url for citation id ${m.id}`,
@@ -467,6 +473,8 @@ export function assertCompleteCitationMapForProtected(text: string, map: Citatio
     if (seen.has(key)) continue;
     seen.add(key);
     const entry = map[key];
+    // Entries with status 'unresolved' are expected — skip validation
+    if (entry?.status === 'unresolved') continue;
     if (!entry?.url?.length) {
       console.error(
         `[VideoLM] Incomplete CitationMap (protected): missing or empty url for citation id ${m.id}`,
@@ -519,7 +527,7 @@ export function encapsulateCitations(text: string): { text: string; beforeCount:
 export function formatCitationMapComment(map: CitationMap): string {
   const keys = Object.keys(map).sort((a, b) => Number(a) - Number(b));
   if (keys.length === 0) return '';
-  const body = keys.map((k) => `${k}: ${map[k].url}`).join('\n');
+  const body = keys.map((k) => `${k}: ${map[k].url ?? '(unresolved)'}`).join('\n');
   return `<!-- CITATION_MAP\n${body}\n-->`;
 }
 
@@ -590,9 +598,6 @@ export function finalizeForNotion(
   const out = body.replace(tagRe, (_full, idStr: string) => {
     const entry = citationMap[idStr];
     if (!entry?.url) {
-      console.error(
-        `[VideoLM] finalizeForNotion: missing citationMap entry for id ${idStr}`,
-      );
       return `[[MISSING_${idStr}]]`;
     }
     return `[[${idStr}] \u{1F4FA}](${entry.url})`;

@@ -716,7 +716,7 @@ async function handleQuickFix(
       const algoConfidence = match.type === 'matched' ? 'high' as const
         : match.type === 'uncertain' ? 'medium' as const
         : 'low' as const;
-      citationMap[String(csn.id)] = { url: match.record.url, confidence: algoConfidence };
+      citationMap[String(csn.id)] = { url: match.record.url, confidence: algoConfidence, status: 'resolved' };
     }
 
     // ── User-provided source override (confidence-based) ──
@@ -730,7 +730,7 @@ async function handleQuickFix(
       hasExisting: !!citationMap[key]?.url
     });
     if (!citationMap[key]?.url && csn.sourceName === fixingSourceName) {
-      citationMap[key] = { url, confidence: 'medium' };
+      citationMap[key] = { url, confidence: 'medium', status: 'resolved' };
       console.log(`[VideoLM] QuickFix user-override ${csn.id}: "${csn.sourceName.slice(0, 30)}" → accepted (confidence: medium)`);
     } else {
       console.log(`[VideoLM] QuickFix re-resolve ${csn.id}: "${csn.sourceName.slice(0, 30)}" → ${match.type} (${match.score.toFixed(2)})`);
@@ -741,7 +741,15 @@ async function handleQuickFix(
   for (const hint of citationHints) {
     const key = String(hint.id);
     if (!citationMap[key]?.url && hint.href) {
-      citationMap[key] = { url: hint.href, confidence: 'low' };
+      citationMap[key] = { url: hint.href, confidence: 'low', status: 'resolved' };
+    }
+  }
+
+  // Ensure every citation ID has an entry — unresolved get fallback
+  for (const csn of allCitationSourceNames) {
+    const key = String(csn.id);
+    if (!citationMap[key]) {
+      citationMap[key] = { url: null, confidence: 'low', status: 'unresolved' };
     }
   }
 
@@ -913,7 +921,7 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
           const confidence = match.type === 'matched' ? 'high' as const
             : match.type === 'uncertain' ? 'medium' as const
             : 'low' as const;
-          citationMap[String(csn.id)] = { url: match.record.url, confidence };
+          citationMap[String(csn.id)] = { url: match.record.url, confidence, status: 'resolved' };
         }
         console.log(`[VideoLM] Citation ${csn.id}: "${csn.sourceName.slice(0, 30)}" → ${match.type} (${match.score.toFixed(2)})`);
       }
@@ -922,7 +930,15 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
       for (const hint of citationHints) {
         const key = String(hint.id);
         if (!citationMap[key]?.url && hint.href) {
-          citationMap[key] = { url: hint.href, confidence: 'low' };
+          citationMap[key] = { url: hint.href, confidence: 'low', status: 'resolved' };
+        }
+      }
+
+      // Ensure every citation ID has an entry — unresolved get fallback
+      for (const csn of citationSourceNames) {
+        const key = String(csn.id);
+        if (!citationMap[key]) {
+          citationMap[key] = { url: null, confidence: 'low', status: 'unresolved' };
         }
       }
 

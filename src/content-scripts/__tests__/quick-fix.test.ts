@@ -5,7 +5,7 @@ import {
   buildFingerprintIndex,
   resolveCitation,
 } from '@/utils/source-resolution';
-import type { CitationConfidence } from '@/utils/notion-sync';
+import type { CitationConfidence, CitationStatus } from '@/utils/notion-sync';
 
 describe('Quick Fix data flow', () => {
   describe('URL validation gate', () => {
@@ -76,7 +76,7 @@ describe('Quick Fix data flow', () => {
       const sourceIndex = [record];
       const fpIndex = buildFingerprintIndex(sourceIndex);
 
-      const citationMap: Record<string, { url: string; confidence?: CitationConfidence }> = {};
+      const citationMap: Record<string, { url: string | null; confidence?: CitationConfidence; status?: CitationStatus }> = {};
 
       for (const csn of citations) {
         const match = resolveCitation(csn.sourceName, fpIndex, sourceIndex);
@@ -84,13 +84,21 @@ describe('Quick Fix data flow', () => {
           const algoConfidence: CitationConfidence = match.type === 'matched' ? 'high'
             : match.type === 'uncertain' ? 'medium'
             : 'low';
-          citationMap[String(csn.id)] = { url: match.record.url, confidence: algoConfidence };
+          citationMap[String(csn.id)] = { url: match.record.url, confidence: algoConfidence, status: 'resolved' };
         }
 
         // ── User-provided source override (same logic as handleQuickFix) ──
         const key = String(csn.id);
         if (!citationMap[key]?.url && csn.sourceName === fixingSourceName) {
-          citationMap[key] = { url: userUrl, confidence: 'medium' };
+          citationMap[key] = { url: userUrl, confidence: 'medium', status: 'resolved' };
+        }
+      }
+
+      // Ensure every citation ID has an entry — unresolved get fallback
+      for (const csn of citations) {
+        const key = String(csn.id);
+        if (!citationMap[key]) {
+          citationMap[key] = { url: null, confidence: 'low', status: 'unresolved' };
         }
       }
 
@@ -140,8 +148,10 @@ describe('Quick Fix data flow', () => {
 
       // The fixing source gets the URL
       expect(citationMap['10']?.url).toBe('https://youtube.com/watch?v=lowconf');
-      // Unrelated citation does NOT get the user-provided URL
-      expect(citationMap['11']?.url).toBeUndefined();
+      // Unrelated citation gets fallback entry with null url (not the user-provided URL)
+      expect(citationMap['11']).toBeDefined();
+      expect(citationMap['11'].url).toBeNull();
+      expect(citationMap['11'].status).toBe('unresolved');
     });
 
     it('does not override citations already resolved by algorithm', () => {
@@ -227,22 +237,124 @@ describe('Quick Fix data flow', () => {
       expect(citationMap['7'].confidence).toBe('low');
     });
 
-    it('does not assign confidence to unresolved citations (no entry)', () => {
+    it('assigns "low" confidence with "unresolved" status for unresolved citations', () => {
       const record = createVideoSourceRecord(
         'v3', 'Python 教學', 'Ch', 'https://youtube.com/watch?v=v3',
       );
       const sourceIndex = [record];
       const fpIndex = buildFingerprintIndex(sourceIndex);
 
-      const citationMap: Record<string, { url: string; confidence?: CitationConfidence }> = {};
-      const match = resolveCitation('React Native 開發指南', fpIndex, sourceIndex);
+      const citationMap: Record<string, { url: string | null; confidence?: CitationConfidence; status?: CitationStatus }> = {};
+      const csn = { id: 99, sourceName: 'React Native 開發指南' };
+      const match = resolveCitation(csn.sourceName, fpIndex, sourceIndex);
       if (match.record?.url) {
-        citationMap['99'] = { url: match.record.url, confidence: 'high' };
+        citationMap[String(csn.id)] = { url: match.record.url, confidence: 'high', status: 'resolved' };
+      }
+      // Fallback for unresolved
+      if (!citationMap[String(csn.id)]) {
+        citationMap[String(csn.id)] = { url: null, confidence: 'low', status: 'unresolved' };
       }
 
-      // not_found → no entry in citationMap at all
       expect(match.type).toBe('not_found');
-      expect(citationMap['99']).toBeUndefined();
+      expect(citationMap['99']).toBeDefined();
+      expect(citationMap['99'].url).toBeNull();
+      expect(citationMap['99'].confidence).toBe('low');
+      expect(citationMap['99'].status).toBe('unresolved');
+    });
+  });
+
+  describe('citationMap completeness (no missing entries)', () => {
+    /**
+     * Simulates the full citationMap construction with fallback entries,
+     * mirroring the logic in both the main pipeline and handleQuickFix.
+     */
+    function buildCompleteCitationMap(
+      citations: { id: number; sourceName: string }[],
+      sourceIndex: ReturnType<typeof createVideoSourceRecord>[],
+    ) {
+      const fpIndex = buildFingerprintIndex(sourceIndex);
+      const citationMap: Record<string, { url: string | null; confidence?: CitationConfidence; status?: CitationStatus }> = {};
+
+      for (const csn of citations) {
+        const match = resolveCitation(csn.sourceName, fpIndex, sourceIndex);
+        if (match.record?.url) {
+          const confidence: CitationConfidence = match.type === 'matched' ? 'high'
+            : match.type === 'uncertain' ? 'medium' : 'low';
+          citationMap[String(csn.id)] = { url: match.record.url, confidence, status: 'resolved' };
+        }
+      }
+
+      // Ensure every citation ID has an entry
+      for (const csn of citations) {
+        const key = String(csn.id);
+        if (!citationMap[key]) {
+          citationMap[key] = { url: null, confidence: 'low', status: 'unresolved' };
+        }
+      }
+
+      return citationMap;
+    }
+
+    it('should not produce missing citationMap entry', () => {
+      const record = createVideoSourceRecord(
+        'v1', 'Claude AI 教學', 'Ch', 'https://youtube.com/watch?v=v1',
+      );
+      const citations = [
+        { id: 1, sourceName: 'Claude AI 教學' },      // will match
+        { id: 2, sourceName: '完全不相關的來源' },       // will NOT match
+        { id: 3, sourceName: '另一個無法匹配的來源' },   // will NOT match
+      ];
+
+      const citationMap = buildCompleteCitationMap(citations, [record]);
+
+      // Every citation ID must have an entry — no gaps
+      expect(citationMap['1']).toBeDefined();
+      expect(citationMap['2']).toBeDefined();
+      expect(citationMap['3']).toBeDefined();
+
+      // Matched entry has url + resolved
+      expect(citationMap['1'].url).toBe('https://youtube.com/watch?v=v1');
+      expect(citationMap['1'].status).toBe('resolved');
+
+      // Unmatched entries have null url + unresolved
+      expect(citationMap['2'].url).toBeNull();
+      expect(citationMap['2'].status).toBe('unresolved');
+      expect(citationMap['3'].url).toBeNull();
+      expect(citationMap['3'].status).toBe('unresolved');
+    });
+
+    it('all citation ids must exist in citationMap', () => {
+      // Stress test: 10 citations, only 2 resolvable
+      const records = [
+        createVideoSourceRecord('v1', 'Python 入門', 'Ch', 'https://youtube.com/watch?v=v1'),
+        createVideoSourceRecord('v2', 'React 基礎', 'Ch', 'https://youtube.com/watch?v=v2'),
+      ];
+      const citations = Array.from({ length: 10 }, (_, i) => ({
+        id: i + 1,
+        sourceName: i === 0 ? 'Python 入門' : i === 5 ? 'React 基礎' : `Unknown Source ${i}`,
+      }));
+
+      const citationMap = buildCompleteCitationMap(citations, records);
+
+      // Every single ID from 1–10 must be present
+      for (let i = 1; i <= 10; i++) {
+        expect(citationMap[String(i)]).toBeDefined();
+        expect(citationMap[String(i)]).toHaveProperty('url');
+        expect(citationMap[String(i)]).toHaveProperty('status');
+      }
+
+      // Verify the two matched ones are resolved
+      expect(citationMap['1'].url).toContain('v1');
+      expect(citationMap['1'].status).toBe('resolved');
+      expect(citationMap['6'].url).toContain('v2');
+      expect(citationMap['6'].status).toBe('resolved');
+
+      // Verify all others are unresolved
+      for (const id of ['2', '3', '4', '5', '7', '8', '9', '10']) {
+        expect(citationMap[id].url).toBeNull();
+        expect(citationMap[id].confidence).toBe('low');
+        expect(citationMap[id].status).toBe('unresolved');
+      }
     });
   });
 
