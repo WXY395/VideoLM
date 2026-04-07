@@ -14,10 +14,30 @@
 import { FetchInterceptor, type CapturedRequest } from '@/nlm/fetch-interceptor';
 import { DomAutomation } from '@/nlm/dom-automation';
 import { NLM } from '@/config/selectors';
-import type { DynamicConfig, NotionExportOptions, NotionExportResult, VideoContent } from '@/types';
+import type { DynamicConfig, VideoContent } from '@/types';
+import {
+  collectProtectedCitationMatches,
+  wrapVideoCitationTransport,
+  finalizeForNotion,
+  finalizeForNotionHtml,
+  type CitationMap,
+} from '@/utils/notion-sync';
+import {
+  buildFingerprintIndex,
+  resolveCitation,
+  createVideoSourceRecord,
+} from '@/utils/source-resolution';
+import { prepareNlmResponseForNotion, writeNotionToClipboard } from './copy-handler';
+import { isYouTubeUrl, extractVideoIdFromUrl } from '@/utils/url-sanitizer';
 
 let fetchInterceptor: FetchInterceptor | null = null;
 let domAutomation: DomAutomation | null = null;
+
+/** Active Quick Fix panel host — singleton across all response cards */
+let activeQuickFixHost: HTMLElement | null = null;
+
+/** Concurrency guard — prevents double-submit and UI race conditions */
+let isResolving = false;
 
 /**
  * Inject a script string into the page's main world so it can
@@ -91,9 +111,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     case 'READ_NLM_RESPONSE': {
-      const data = readNlmResponse();
-      sendResponse({ type: 'NLM_RESPONSE', data });
-      break;
+      readNlmResponse().then(data => sendResponse({ type: 'NLM_RESPONSE', data }));
+      return true; // keep channel open for async
     }
   }
 });
@@ -168,17 +187,17 @@ function qfAll<T extends Element = Element>(
  * Uses the verified DOM structure: mat-card.to-user-message-card-content >
  *   mat-card-content.message-content
  */
-function readNlmResponse(): { text: string; citationCount: number } {
+async function readNlmResponse(): Promise<{ text: string; citationCount: number }> {
   const cards = qfAll(NLM.RESPONSE_CARD);
   if (cards.length === 0) return { text: '', citationCount: 0 };
 
-  // Take the last card (most recent AI response)
   const lastCard = cards[cards.length - 1];
   const textEl = qf(NLM.RESPONSE_TEXT, lastCard);
-  const text = textEl?.textContent?.trim() || lastCard.textContent?.trim() || '';
-  const citationCount = (text.match(/\[\d+\]/g) || []).length;
+  const root = textEl ?? lastCard;
+  const { protectedText } = await prepareNlmResponseForNotion(root);
+  const citationCount = collectProtectedCitationMatches(protectedText).length;
 
-  return { text, citationCount };
+  return { text: protectedText, citationCount };
 }
 
 // ---------------------------------------------------------------------------
@@ -232,15 +251,318 @@ const NOTION_BTN_STYLES = `
     color: #d93025;
     border-color: #d93025;
   }
+  .vlm-notion-btn--warning {
+    color: #e37400;
+    border-color: #e37400;
+    font-size: 11px;
+  }
   .vlm-notion-btn__icon {
     font-size: 13px;
     line-height: 1;
+  }
+  /* ── Quick Fix Panel ── */
+  .vlm-qf-panel {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    width: 320px;
+    background: var(--mat-sys-surface-container, #fff);
+    border: 1px solid var(--mat-sys-outline-variant, #dadce0);
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+    padding: 8px;
+    z-index: 1000;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 12px;
+  }
+  .vlm-qf-item {
+    padding: 6px 8px;
+    border-radius: 8px;
+    margin-bottom: 4px;
+  }
+  .vlm-qf-item--active {
+    background: color-mix(in srgb, var(--mat-sys-primary, #1a73e8) 6%, transparent);
+  }
+  .vlm-qf-item--pending {
+    opacity: 0.45;
+  }
+  .vlm-qf-item--resolved {
+    color: #0d904f;
+  }
+  .vlm-qf-label {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--mat-sys-on-surface, #1f1f1f);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 300px;
+  }
+  .vlm-qf-row {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+  .vlm-qf-input {
+    flex: 1;
+    padding: 4px 8px;
+    border: 1px solid var(--mat-sys-outline-variant, #dadce0);
+    border-radius: 8px;
+    font-size: 12px;
+    font-family: inherit;
+    outline: none;
+    background: var(--mat-sys-surface, #fff);
+    color: var(--mat-sys-on-surface, #1f1f1f);
+  }
+  .vlm-qf-input:focus {
+    border-color: var(--mat-sys-primary, #1a73e8);
+  }
+  .vlm-qf-submit {
+    all: unset;
+    padding: 4px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    background: var(--mat-sys-primary, #1a73e8);
+    color: #fff;
+    white-space: nowrap;
+  }
+  .vlm-qf-submit:disabled {
+    background: var(--mat-sys-outline-variant, #dadce0);
+    color: #999;
+    cursor: not-allowed;
+  }
+  .vlm-qf-submit--loading {
+    pointer-events: none;
+    opacity: 0.7;
   }
 `;
 
 /** Max retry attempts for finding toolbar (NLM toolbar may render late) */
 const TOOLBAR_RETRY_LIMIT = 3;
 const TOOLBAR_RETRY_MS = 500;
+
+/**
+ * Close the Quick Fix panel and reset all state.
+ * Every close path (toggle, outside click, auto-close) goes through here.
+ */
+function closeQuickFixPanel(): void {
+  if (isResolving) return;
+  if (!activeQuickFixHost) return;
+
+  const panel = activeQuickFixHost.shadowRoot?.querySelector('.vlm-qf-panel');
+  if (panel) panel.remove();
+  activeQuickFixHost = null;
+}
+
+/** Close panel when clicking outside (singleton behavior) */
+document.addEventListener('click', (e) => {
+  if (!activeQuickFixHost) return;
+  if (isResolving) return;
+
+  const path = e.composedPath();
+  if (path.includes(activeQuickFixHost)) return;
+
+  closeQuickFixPanel();
+});
+
+/**
+ * Render the Quick Fix panel inside the button's Shadow DOM.
+ * Shows missing citation source names with URL input for the active item.
+ */
+function showQuickFixPanel(
+  shadow: ShadowRoot,
+  missingItems: Array<{ id: number; sourceName: string }>,
+  resolvedItems: Array<{ id: number; sourceName: string }>,
+  onSubmit: (citationId: number, sourceName: string, url: string) => Promise<void>,
+  host: HTMLElement,
+): void {
+  // Singleton — close any other open panel
+  if (activeQuickFixHost && activeQuickFixHost !== host) {
+    closeQuickFixPanel();
+  }
+
+  // Toggle — if clicking same CTA, close
+  const existing = shadow.querySelector('.vlm-qf-panel');
+  if (existing) {
+    closeQuickFixPanel();
+    return;
+  }
+
+  activeQuickFixHost = host;
+
+  const panel = document.createElement('div');
+  panel.className = 'vlm-qf-panel';
+
+  // Render resolved items (green, no input)
+  for (const item of resolvedItems) {
+    const div = document.createElement('div');
+    div.className = 'vlm-qf-item vlm-qf-item--resolved';
+    const label = document.createElement('span');
+    label.className = 'vlm-qf-label';
+    label.textContent = `\u2705 "${item.sourceName.slice(0, 40)}${item.sourceName.length > 40 ? '...' : ''}"`;
+    div.appendChild(label);
+    panel.appendChild(div);
+  }
+
+  // Render missing items
+  missingItems.forEach((item, idx) => {
+    const isActive = idx === 0;
+    const div = document.createElement('div');
+    div.className = `vlm-qf-item ${isActive ? 'vlm-qf-item--active' : 'vlm-qf-item--pending'}`;
+
+    const label = document.createElement('span');
+    label.className = 'vlm-qf-label';
+    label.textContent = `\uD83D\uDD17 "${item.sourceName.slice(0, 40)}${item.sourceName.length > 40 ? '...' : ''}"`;
+    div.appendChild(label);
+
+    if (isActive) {
+      const row = document.createElement('div');
+      row.className = 'vlm-qf-row';
+
+      const input = document.createElement('input');
+      input.className = 'vlm-qf-input';
+      input.type = 'text';
+      input.placeholder = 'YouTube URL';
+
+      const submitBtn = document.createElement('button');
+      submitBtn.className = 'vlm-qf-submit';
+      submitBtn.textContent = '\u78BA\u8A8D';
+      submitBtn.disabled = true;
+
+      // URL validation — enable/disable submit
+      input.addEventListener('input', () => {
+        submitBtn.disabled = !isYouTubeUrl(input.value.trim());
+      });
+
+      // Submit handler
+      submitBtn.addEventListener('click', async () => {
+        if (isResolving || submitBtn.disabled) return;
+
+        isResolving = true;
+        input.disabled = true;
+        submitBtn.textContent = '\u23F3';
+        submitBtn.classList.add('vlm-qf-submit--loading');
+
+        try {
+          await onSubmit(item.id, item.sourceName, input.value.trim());
+        } finally {
+          isResolving = false;
+        }
+      });
+
+      // Enter key submits
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !submitBtn.disabled) {
+          submitBtn.click();
+        }
+      });
+
+      row.appendChild(input);
+      row.appendChild(submitBtn);
+      div.appendChild(row);
+    }
+
+    panel.appendChild(div);
+  });
+
+  // Position relative to the host
+  (shadow.host as HTMLElement).style.position = 'relative';
+  shadow.appendChild(panel);
+}
+
+/**
+ * Handle a Quick Fix submission:
+ * 1. Create & store source record from URL
+ * 2. Re-resolve ALL citations
+ * 3. Rewrite clipboard with updated citationMap
+ * 4. Update panel UI or close if all resolved
+ */
+async function handleQuickFix(
+  url: string,
+  allCitationSourceNames: Array<{ id: number; sourceName: string }>,
+  protectedText: string,
+  citationHints: Array<{ id: number; href?: string }>,
+  shadow: ShadowRoot,
+  ctaLabel: HTMLSpanElement,
+  host: HTMLElement,
+): Promise<void> {
+  // 1. Create & store source record
+  const videoId = extractVideoIdFromUrl(url);
+  if (!videoId) return;
+
+  const record = createVideoSourceRecord(videoId, '', '', url);
+  await sendMsgAsync({ type: 'STORE_SOURCE_RECORD', record });
+
+  // 2. Re-resolve ALL citations
+  const indexResponse = await sendMsgAsync<{ index: any[] }>({ type: 'GET_SOURCE_INDEX' });
+  const sourceIndex = indexResponse?.index ?? [];
+  const fpIndex = buildFingerprintIndex(sourceIndex);
+
+  const citationMap: CitationMap = {};
+  for (const csn of allCitationSourceNames) {
+    const match = resolveCitation(csn.sourceName, fpIndex, sourceIndex);
+    if (match.record?.url) {
+      citationMap[String(csn.id)] = { url: match.record.url };
+    }
+    console.log(`[VideoLM] QuickFix re-resolve ${csn.id}: "${csn.sourceName.slice(0, 30)}" → ${match.type} (${match.score.toFixed(2)})`);
+  }
+
+  // Fallback: DOM-extracted hrefs
+  for (const hint of citationHints) {
+    const key = String(hint.id);
+    if (!citationMap[key]?.url && hint.href) {
+      citationMap[key] = { url: hint.href };
+    }
+  }
+
+  // 3. Rewrite clipboard
+  const transportBlock = wrapVideoCitationTransport(protectedText, citationMap);
+  const decodeOpts = { parityMode: 'warn' as const, appendParityCaution: false, skipOuterFence: false };
+  const plainText = finalizeForNotion(transportBlock, citationMap, decodeOpts);
+  const html = finalizeForNotionHtml(transportBlock, citationMap, decodeOpts);
+  await writeNotionToClipboard(plainText, html);
+
+  // 4. Compute new missing/resolved state
+  const nowMissing = allCitationSourceNames.filter(
+    csn => !citationMap[String(csn.id)]?.url,
+  );
+  const nowResolved = allCitationSourceNames.filter(
+    csn => !!citationMap[String(csn.id)]?.url,
+  );
+
+  // 5. Update UI
+  if (nowMissing.length === 0) {
+    closeQuickFixPanel();
+    ctaLabel.textContent = '\u2714';
+    const btn = ctaLabel.parentElement!;
+    btn.classList.remove('vlm-notion-btn--warning');
+    btn.classList.add('vlm-notion-btn--success');
+    setTimeout(() => {
+      ctaLabel.textContent = 'Notion';
+      btn.classList.remove('vlm-notion-btn--success');
+    }, 2000);
+  } else {
+    ctaLabel.textContent = `\u26A0 ${nowMissing.length} \u500B\u4F86\u6E90\u7F3A\u5931 \u25BE`;
+
+    const oldPanel = shadow.querySelector('.vlm-qf-panel');
+    if (oldPanel) oldPanel.remove();
+    activeQuickFixHost = null;
+
+    showQuickFixPanel(
+      shadow,
+      nowMissing,
+      nowResolved,
+      (_, __, newUrl) => handleQuickFix(
+        newUrl, allCitationSourceNames, protectedText, citationHints, shadow, ctaLabel, host,
+      ),
+      host,
+    );
+  }
+}
 
 /**
  * Create a Shadow DOM-isolated "Copy for Notion" button and attach it
@@ -279,7 +601,7 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
   const host = document.createElement('span');
   host.className = NOTION_BTN_HOST_CLASS;
 
-  const shadow = host.attachShadow({ mode: 'closed' });
+  const shadow = host.attachShadow({ mode: 'open' });
 
   // Inject styles
   const style = document.createElement('style');
@@ -301,18 +623,32 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
   btn.appendChild(iconSpan);
   btn.appendChild(labelSpan);
 
-  // Click handler — reads text from mat-card-content at click time (not closure capture)
+  // Click handler — Full injection-first pipeline:
+  //
+  // contentRoot → prepareNlmResponseForNotion()    [STEP 1: inject <VIDEO_CITATION/>]
+  //             → build CitationMap                 [STEP 2: id → url&t]
+  //             → wrapVideoCitationTransport()      [STEP 3: fence + CITATION_MAP]
+  //             → finalizeForNotion()               [STEP 4: decode → [[n] 📺](url)]
+  //             → clipboard                         [STEP 5: write]
+  //
+  // ❗ No rawText fallback. Missing citations → [[MISSING_n]].
   btn.addEventListener('click', async () => {
     if (btn.classList.contains('vlm-notion-btn--success')) return;
+    if (btn.classList.contains('vlm-notion-btn--warning')) return;
 
     const originalLabel = labelSpan.textContent;
     labelSpan.textContent = '...';
 
     try {
-      // 1. Read the response text from mat-card-content (fresh read, not stale closure)
-      const responseText = (textEl ?? cardEl).textContent?.trim() || '';
-      if (!responseText) {
-        labelSpan.textContent = '\u2718'; // ✘
+      // ── STEP 1: DOM → protected text with <VIDEO_CITATION/> tags ──
+      const contentRoot = (textEl ?? cardEl) as Element;
+      const { protectedText, citationHints, citationSourceNames } = await prepareNlmResponseForNotion(contentRoot, cardEl);
+      console.log('[VideoLM] STEP 1 RAW:', protectedText.slice(0, 200));
+      console.log('[VideoLM] STEP 1 SOURCE NAMES:', citationSourceNames.length, citationSourceNames.slice(0, 3));
+      console.log('[VideoLM] STEP 1 cardEl:', cardEl?.tagName, cardEl?.className?.toString().slice(0, 50));
+
+      if (!protectedText.trim()) {
+        labelSpan.textContent = '\u2718';
         btn.classList.add('vlm-notion-btn--error');
         setTimeout(() => {
           labelSpan.textContent = originalLabel;
@@ -321,40 +657,111 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
         return;
       }
 
-      // 2. Capture page title synchronously (before any async boundary)
-      let pageTitle = 'Unknown Video';
-      try { pageTitle = document.title.replace(/ - NotebookLM$/, '').trim() || pageTitle; } catch {}
+      // ── STEP 2: Resolve citations via Source Resolution Layer ──
 
-      // 3. Get stored videoContent from session storage
-      const videoContent = await getStoredVideoContent();
+      // Load source index from chrome.storage.local (permanent, cross-session)
+      const indexResponse = await sendMsgAsync<{ index: any[] }>({ type: 'GET_SOURCE_INDEX' });
+      const sourceIndex = indexResponse?.index ?? [];
 
-      // 4. Run Notion export via service worker
-      const options: NotionExportOptions = {
-        includeCallout: !!videoContent,
-        includeCheckboxes: true,
-        includeTimestampLinks: !!videoContent,
-        includeSpecScript: true,
-      };
+      // Build in-memory fingerprint index (O(1) lookup)
+      const fpIndex = buildFingerprintIndex(sourceIndex);
 
-      const result = await sendMsgAsync<NotionExportResult & { error?: string }>({
-        type: 'NOTION_EXPORT',
-        content: responseText,
-        videoContent: videoContent || buildFallbackVideoContent(pageTitle),
-        options,
+      // Resolve each citation via scored fingerprint matching
+      const citationMap: CitationMap = {};
+      for (const csn of citationSourceNames) {
+        const match = resolveCitation(csn.sourceName, fpIndex, sourceIndex);
+        if (match.record?.url) {
+          citationMap[String(csn.id)] = { url: match.record.url };
+        }
+        console.log(`[VideoLM] Citation ${csn.id}: "${csn.sourceName.slice(0, 30)}" → ${match.type} (${match.score.toFixed(2)})`);
+      }
+
+      // Fallback: DOM-extracted hrefs (fills remaining gaps)
+      for (const hint of citationHints) {
+        const key = String(hint.id);
+        if (!citationMap[key]?.url && hint.href) {
+          citationMap[key] = { url: hint.href };
+        }
+      }
+
+      const citationMatches = collectProtectedCitationMatches(protectedText);
+      console.log('[VideoLM] STEP 2 MAP:', {
+        citationCount: citationMatches.length,
+        resolved: Object.keys(citationMap).length,
+        sourceIndexSize: sourceIndex.length,
       });
 
-      if (result?.error) throw new Error(result.error);
+      // ── STEP 3: Wrap in transport block (fence + CITATION_MAP comment) ──
+      const transportBlock = wrapVideoCitationTransport(protectedText, citationMap);
+      console.log('[VideoLM] STEP 3 WRAPPED:', transportBlock.slice(0, 200));
 
-      // 5. Copy to clipboard
-      await navigator.clipboard.writeText(result.markdown);
+      // ── STEP 4: Decode → plain text (markdown) + HTML (<a> links for Notion) ──
+      const decodeOpts = { parityMode: 'warn' as const, appendParityCaution: false, skipOuterFence: false };
+      const plainText = finalizeForNotion(transportBlock, citationMap, decodeOpts);
+      const html = finalizeForNotionHtml(transportBlock, citationMap, decodeOpts);
+      console.log('[VideoLM] STEP 4 PLAIN:', plainText.slice(0, 200));
+      console.log('[VideoLM] STEP 4 HTML:', html.slice(0, 200));
 
-      // 6. Success state (green checkmark for 2s)
-      labelSpan.textContent = '\u2714'; // ✔
-      btn.classList.add('vlm-notion-btn--success');
-      setTimeout(() => {
-        labelSpan.textContent = originalLabel;
-        btn.classList.remove('vlm-notion-btn--success');
-      }, 2000);
+      // ── STEP 5: Dual-channel clipboard (html=<a> for Notion, plain=markdown fallback) ──
+      await writeNotionToClipboard(plainText, html);
+
+      // ── STEP 6: Feedback — show resolution stats ──
+      const totalCitations = citationMatches.length;
+      const resolvedCount = Object.keys(citationMap).length;
+      const missingCount = totalCitations - resolvedCount;
+
+      if (missingCount > 0) {
+        // ── Persistent CTA — Quick Fix entry point ──
+        const missingItems = citationSourceNames
+          .filter((csn: { id: number; sourceName: string }) => !citationMap[String(csn.id)])
+          .map((csn: { id: number; sourceName: string }) => ({ id: csn.id, sourceName: csn.sourceName }));
+
+        labelSpan.textContent = `\u26A0 ${missingCount} \u500B\u4F86\u6E90\u7F3A\u5931 \u25BE`;
+        btn.classList.add('vlm-notion-btn--warning');
+
+        const missingNames = citationSourceNames
+          .filter((csn: { id: number; sourceName: string }) => !citationMap[String(csn.id)])
+          .map((csn: { id: number; sourceName: string }) => csn.sourceName.slice(0, 40));
+        console.warn(`[VideoLM] ${missingCount} citation(s) missing. Sources not in index:`, [...new Set(missingNames)]);
+        console.warn('[VideoLM] Fix: Quick Import these videos or use the Quick Fix panel.');
+
+        // Capture STEP 1 outputs for re-use in handleQuickFix
+        const capturedProtectedText = protectedText;
+        const capturedCitationHints = citationHints;
+        const capturedCitationSourceNames = citationSourceNames;
+
+        // CTA click → toggle Quick Fix panel
+        const ctaClickHandler = (e: Event) => {
+          e.stopPropagation();
+          if (isResolving) return;
+
+          showQuickFixPanel(
+            shadow,
+            missingItems,
+            [],
+            (_, __, url) => handleQuickFix(
+              url,
+              capturedCitationSourceNames,
+              capturedProtectedText,
+              capturedCitationHints,
+              shadow,
+              labelSpan,
+              host,
+            ),
+            host,
+          );
+        };
+
+        btn.addEventListener('click', ctaClickHandler);
+      } else {
+        // Full success — green checkmark
+        labelSpan.textContent = '\u2714'; // ✔
+        btn.classList.add('vlm-notion-btn--success');
+        setTimeout(() => {
+          labelSpan.textContent = originalLabel;
+          btn.classList.remove('vlm-notion-btn--success');
+        }, 2000);
+      }
     } catch (err) {
       console.error('[VideoLM] Notion copy failed:', err);
       labelSpan.textContent = '\u2718';
