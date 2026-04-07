@@ -713,7 +713,10 @@ async function handleQuickFix(
   for (const csn of allCitationSourceNames) {
     const match = resolveCitation(csn.sourceName, fpIndex, sourceIndex);
     if (match.record?.url) {
-      citationMap[String(csn.id)] = { url: match.record.url };
+      const algoConfidence = match.type === 'matched' ? 'high' as const
+        : match.type === 'uncertain' ? 'medium' as const
+        : 'low' as const;
+      citationMap[String(csn.id)] = { url: match.record.url, confidence: algoConfidence };
     }
 
     // ── User-provided source override (confidence-based) ──
@@ -727,11 +730,8 @@ async function handleQuickFix(
       hasExisting: !!citationMap[key]?.url
     });
     if (!citationMap[key]?.url && csn.sourceName === fixingSourceName) {
-      const confidence = match.type === 'matched' ? 'high'
-        : match.type === 'uncertain' ? 'medium'
-        : 'low';
-      citationMap[key] = { url };
-      console.log(`[VideoLM] QuickFix user-override ${csn.id}: "${csn.sourceName.slice(0, 30)}" → accepted (confidence: ${confidence})`);
+      citationMap[key] = { url, confidence: 'medium' };
+      console.log(`[VideoLM] QuickFix user-override ${csn.id}: "${csn.sourceName.slice(0, 30)}" → accepted (confidence: medium)`);
     } else {
       console.log(`[VideoLM] QuickFix re-resolve ${csn.id}: "${csn.sourceName.slice(0, 30)}" → ${match.type} (${match.score.toFixed(2)})`);
     }
@@ -741,7 +741,7 @@ async function handleQuickFix(
   for (const hint of citationHints) {
     const key = String(hint.id);
     if (!citationMap[key]?.url && hint.href) {
-      citationMap[key] = { url: hint.href };
+      citationMap[key] = { url: hint.href, confidence: 'low' };
     }
   }
 
@@ -910,7 +910,10 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
       for (const csn of citationSourceNames) {
         const match = resolveCitation(csn.sourceName, fpIndex, sourceIndex);
         if (match.record?.url) {
-          citationMap[String(csn.id)] = { url: match.record.url };
+          const confidence = match.type === 'matched' ? 'high' as const
+            : match.type === 'uncertain' ? 'medium' as const
+            : 'low' as const;
+          citationMap[String(csn.id)] = { url: match.record.url, confidence };
         }
         console.log(`[VideoLM] Citation ${csn.id}: "${csn.sourceName.slice(0, 30)}" → ${match.type} (${match.score.toFixed(2)})`);
       }
@@ -919,7 +922,7 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
       for (const hint of citationHints) {
         const key = String(hint.id);
         if (!citationMap[key]?.url && hint.href) {
-          citationMap[key] = { url: hint.href };
+          citationMap[key] = { url: hint.href, confidence: 'low' };
         }
       }
 

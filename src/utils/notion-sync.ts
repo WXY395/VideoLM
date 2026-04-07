@@ -37,17 +37,28 @@ const DECODED_CITATION_LINK_RE = /\[\[(\d+)\]\s*\u{1F4FA}\]\([^)]+\)/gu;
 export const citationRegex = /(?:\[(\d+)\]|(?<=\s)(\d{1,3})(?=[\s.,;)]))/g;
 
 /** Tolerant decoder for `<VIDEO_CITATION />` after Notion AI whitespace / case drift */
-const VIDEO_CITATION_TAG_RE =
+export const VIDEO_CITATION_TAG_RE =
   /<\s*VIDEO_CITATION\s+id=["'](\d+)["']\s*\/>/gi;
 
-const VIDEO_CITATION_FENCE_RE =
-  /^```\s*VIDEO_CITATION_BLOCK\s*\r?\n([\s\S]*?)\r?\n```\s*$/im;
+/** Primary transport fence (v1 — do not rename; paired with CITATION_MAP comment) */
+export const VIDEO_CITATION_FENCE_ID = 'VIDEO_CITATION_BLOCK_v1_DO_NOT_TOUCH__SYSTEM';
+
+const VIDEO_CITATION_FENCE_PATTERNS = [
+  /^```\s*VIDEO_CITATION_BLOCK_v1_DO_NOT_TOUCH__SYSTEM\s*\r?\n([\s\S]*?)\r?\n```\s*/im,
+  /^```\s*VIDEO_CITATION_BLOCK\s*\r?\n([\s\S]*?)\r?\n```\s*/im,
+] as const;
+
+const CITATION_MAP_COMMENT_RE = /\n?<!--\s*CITATION_MAP[\s\S]*?-->\s*$/i;
 
 /** Structured map: id → resolved YouTube URL (+ optional timestamp in seconds) */
+export type CitationConfidence = 'high' | 'medium' | 'low';
+
 export type CitationMap = {
   [id: string]: {
     url: string;
     timestamp?: number;
+    /** Resolution confidence: high = algorithm, medium = user override, low = unresolved/fallback */
+    confidence?: CitationConfidence;
   };
 };
 
@@ -160,6 +171,42 @@ function extractCitations(text: string): CitationHit[] {
     context: text.slice(
       Math.max(0, cm.index - 100),
       Math.min(text.length, cm.index + cm.length + 100),
+    ),
+  }));
+}
+
+function stripProtectedTagsForContext(s: string): string {
+  return s.replace(new RegExp(VIDEO_CITATION_TAG_RE.source, 'gi'), ' ');
+}
+
+/** Collect `<VIDEO_CITATION id="n"/>` positions (left-to-right). */
+export function collectProtectedCitationMatches(text: string): CitationMatch[] {
+  const out: CitationMatch[] = [];
+  const re = new RegExp(VIDEO_CITATION_TAG_RE.source, 'gi');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const id = parseInt(m[1], 10);
+    if (!Number.isFinite(id) || id < 1) continue;
+    out.push({
+      id,
+      index: m.index,
+      length: m[0].length,
+      raw: m[0],
+    });
+  }
+  return out;
+}
+
+function extractCitationsFromProtected(text: string): CitationHit[] {
+  const matches = collectProtectedCitationMatches(text);
+  return matches.map((cm) => ({
+    id: cm.id,
+    position: cm.index,
+    context: stripProtectedTagsForContext(
+      text.slice(
+        Math.max(0, cm.index - 100),
+        Math.min(text.length, cm.index + cm.length + 100),
+      ),
     ),
   }));
 }
@@ -286,11 +333,83 @@ export function buildCitationMap(
   return citations;
 }
 
+/**
+ * Resolve timestamps for `<VIDEO_CITATION id="n"/>` — same resolver as `buildCitationMap`,
+ * but citation positions come from protected tags (not `[n]` text).
+ */
+export function buildCitationMapFromProtected(
+  protectedText: string,
+  segments: readonly TranscriptSegment[],
+  videoId: string,
+  videoDuration: number,
+): VideoCitation[] {
+  const timestampHits = extractTimestamps(protectedText, videoDuration);
+  const citationHits = extractCitationsFromProtected(protectedText);
+
+  if (citationHits.length === 0) return [];
+
+  const citations: VideoCitation[] = [];
+  let lastResolvedTimestamp = -1;
+
+  for (const cite of citationHits) {
+    let nearestTs: TimestampHit | null = null;
+    for (let i = timestampHits.length - 1; i >= 0; i--) {
+      const ts = timestampHits[i];
+      if (ts.position <= cite.position) {
+        const distance = cite.position - ts.position;
+        if (distance <= TIMESTAMP_PROXIMITY) {
+          nearestTs = ts;
+        }
+        break;
+      }
+    }
+
+    if (nearestTs) {
+      const reverseJump = lastResolvedTimestamp - nearestTs.seconds;
+      if (reverseJump <= MONOTONIC_REVERSE_LIMIT || lastResolvedTimestamp < 0) {
+        citations.push({
+          id: cite.id,
+          timestamp: nearestTs.seconds,
+          videoId,
+          confidence: 'exact',
+        });
+        lastResolvedTimestamp = nearestTs.seconds;
+        continue;
+      }
+    }
+
+    const anchorSeconds = nearestTs?.seconds;
+    const fuzzyResult = findBestSegmentMatch(cite.context, segments, anchorSeconds);
+
+    if (fuzzyResult) {
+      const ts = Math.floor(fuzzyResult.segment.start);
+      citations.push({
+        id: cite.id,
+        timestamp: ts,
+        videoId,
+        confidence: 'fuzzy',
+      });
+      lastResolvedTimestamp = ts;
+      continue;
+    }
+
+    citations.push({
+      id: cite.id,
+      timestamp: 0,
+      videoId,
+      confidence: 'none',
+    });
+  }
+
+  return citations;
+}
+
 // ---------------------------------------------------------------------------
 // CitationMap + validation
 // ---------------------------------------------------------------------------
 
 function youtubeWatchUrl(videoId: string, timestampSeconds?: number): string {
+  if (!videoId) return ''; // No videoId → no URL → citation becomes [[MISSING_n]]
   const base = `https://youtube.com/watch?v=${videoId}`;
   if (timestampSeconds !== undefined && timestampSeconds > 0) {
     return `${base}&t=${timestampSeconds}s`;
@@ -301,6 +420,10 @@ function youtubeWatchUrl(videoId: string, timestampSeconds?: number): string {
 /**
  * Build structured CitationMap from resolved VideoCitation rows (one row per occurrence in text).
  */
+/**
+ * Build structured CitationMap from resolved VideoCitation rows.
+ * Citations with empty videoId are **excluded** — they will become [[MISSING_n]] in the decoder.
+ */
 export function videoCitationsToCitationMap(
   citations: readonly VideoCitation[],
 ): CitationMap {
@@ -309,6 +432,7 @@ export function videoCitationsToCitationMap(
     const ts =
       c.confidence !== 'none' && c.timestamp > 0 ? c.timestamp : undefined;
     const url = youtubeWatchUrl(c.videoId, ts);
+    if (!url) continue; // Skip — no videoId means no valid URL
     map[String(c.id)] = { url, timestamp: ts };
   }
   return map;
@@ -333,6 +457,43 @@ export function assertCompleteCitationMap(text: string, map: CitationMap): void 
   }
 }
 
+/** Every distinct `<VIDEO_CITATION id="n"/>` in protected text must have a map entry with url. */
+export function assertCompleteCitationMapForProtected(text: string, map: CitationMap): void {
+  const matches = collectProtectedCitationMatches(text);
+  const seen = new Set<string>();
+  for (const m of matches) {
+    const key = String(m.id);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const entry = map[key];
+    if (!entry?.url?.length) {
+      throw new Error(
+        `[VideoLM] Incomplete CitationMap (protected): missing or empty url for citation id ${m.id}`,
+      );
+    }
+  }
+}
+
+/**
+ * Merge DOM-extracted citation hints into an existing CitationMap.
+ * Hints with valid hrefs fill in entries that are missing from the map
+ * (e.g., when videoContent is unavailable and timestamp-based resolution failed).
+ */
+export function mergeCitationHints(
+  map: CitationMap,
+  hints?: readonly { id: number; href?: string }[],
+): CitationMap {
+  if (!hints?.length) return map;
+  const merged = { ...map };
+  for (const h of hints) {
+    const key = String(h.id);
+    if (!merged[key]?.url && h.href) {
+      merged[key] = { url: h.href };
+    }
+  }
+  return merged;
+}
+
 // ---------------------------------------------------------------------------
 // Encapsulation + Protection layers
 // ---------------------------------------------------------------------------
@@ -351,16 +512,38 @@ export function encapsulateCitations(text: string): { text: string; beforeCount:
 }
 
 /**
- * Wrap payload for a stable "system block" boundary when round-tripping through Notion AI.
+ * HTML comment listing id → canonical URL (transport audit; mapping is still SoT in code).
+ */
+export function formatCitationMapComment(map: CitationMap): string {
+  const keys = Object.keys(map).sort((a, b) => Number(a) - Number(b));
+  if (keys.length === 0) return '';
+  const body = keys.map((k) => `${k}: ${map[k].url}`).join('\n');
+  return `<!-- CITATION_MAP\n${body}\n-->`;
+}
+
+/**
+ * Fence + optional CITATION_MAP comment — canonical transport container.
+ */
+export function wrapVideoCitationTransport(inner: string, citationMap: CitationMap): string {
+  const fence = `\`\`\`${VIDEO_CITATION_FENCE_ID}\n${inner}\n\`\`\``;
+  const comment = formatCitationMapComment(citationMap);
+  return comment ? `${fence}\n${comment}` : fence;
+}
+
+/**
+ * Fence only (legacy tests / minimal wrap). Prefer `wrapVideoCitationTransport` when a map exists.
  */
 export function wrapVideoCitationBlock(inner: string): string {
-  return `\`\`\`VIDEO_CITATION_BLOCK\n${inner}\n\`\`\``;
+  return `\`\`\`${VIDEO_CITATION_FENCE_ID}\n${inner}\n\`\`\``;
 }
 
 export function stripVideoCitationFence(text: string): string {
-  const t = text.trim();
-  const m = t.match(VIDEO_CITATION_FENCE_RE);
-  if (m) return m[1].trim();
+  let t = text.trim();
+  t = t.replace(CITATION_MAP_COMMENT_RE, '').trim();
+  for (const p of VIDEO_CITATION_FENCE_PATTERNS) {
+    const m = t.match(p);
+    if (m) return m[1].trim();
+  }
   return t;
 }
 
@@ -376,7 +559,7 @@ function countDecodedLinks(markdown: string): number {
 }
 
 function countMissingPlaceholders(markdown: string): number {
-  const re = /\[\[MISSING_CITATION_(\d+)\]\]/g;
+  const re = /\[\[MISSING_(\d+)\]\]/g;
   let n = 0;
   while (re.exec(markdown) !== null) n++;
   return n;
@@ -408,16 +591,16 @@ export function finalizeForNotion(
       console.error(
         `[VideoLM] finalizeForNotion: missing citationMap entry for id ${idStr}`,
       );
-      return `[[MISSING_CITATION_${idStr}]]`;
+      return `[[MISSING_${idStr}]]`;
     }
     return `[[${idStr}] \u{1F4FA}](${entry.url})`;
   });
 
   const afterCount = countDecodedLinks(out) + countMissingPlaceholders(out);
   if (beforeDecodeCount !== afterCount) {
-    const msg = `⚠️ 引文遺失: expected ${beforeDecodeCount} citation slot(s), got ${afterCount} after decode (parity)`;
+    const msg = `Citation mismatch: expected ${beforeDecodeCount} citation slot(s), got ${afterCount} after decode (parity)`;
     if (parityMode === 'warn') {
-      console.warn(`[VideoLM notion-sync] ${msg}`);
+      console.warn(`[VideoLM notion-sync] ⚠️ ${msg}`);
     } else {
       throw new Error(`[VideoLM] ${msg}`);
     }
@@ -427,6 +610,42 @@ export function finalizeForNotion(
   }
 
   return out;
+}
+
+/**
+ * Decode `<VIDEO_CITATION id="n"/>` into HTML `<a>` tags for Notion paste.
+ *
+ * Notion's paste handler reads `text/html` and converts `<a href="...">` into
+ * clickable links. Markdown `[text](url)` in `text/plain` is NOT auto-linked.
+ *
+ * Uses the same fence-stripping and parity logic as `finalizeForNotion`.
+ */
+export function finalizeForNotionHtml(
+  text: string,
+  citationMap: CitationMap,
+  options?: FinalizeNotionOptions,
+): string {
+  let body = text;
+  if (!options?.skipOuterFence) {
+    body = stripVideoCitationFence(text);
+  }
+
+  // Escape HTML entities in the body text (but NOT in our injected tags)
+  // We do replacement first, then escape the surrounding text
+  const tagRe = new RegExp(VIDEO_CITATION_TAG_RE.source, VIDEO_CITATION_TAG_RE.flags);
+
+  const html = body.replace(tagRe, (_full, idStr: string) => {
+    const entry = citationMap[idStr];
+    if (!entry?.url) {
+      return `<span style="color:#d93025;font-weight:600">[MISSING_${idStr}]</span>`;
+    }
+    // HTML anchor — Notion will convert this into a clickable link on paste
+    const safeUrl = entry.url.replace(/"/g, '&quot;');
+    return `<a href="${safeUrl}" target="_blank">[${idStr}] \u{1F4FA}</a>`;
+  });
+
+  // Wrap in basic HTML structure with line breaks preserved
+  return html.replace(/\n/g, '<br>\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -512,8 +731,8 @@ export function wrapWithSpecScript(markdown: string): string {
   const spec = [
     '<!--',
     '\u2699\uFE0F VideoLM Export Spec',
-    'Do not modify ```VIDEO_CITATION_BLOCK``` fences or <VIDEO_CITATION/> tags.',
-    'Preserve checkbox lines: - [ ] item',
+    `Do not modify \`\`\`${VIDEO_CITATION_FENCE_ID}\`\`\` fences or <VIDEO_CITATION/> tags.`,
+    'Preserve <!-- CITATION_MAP --> and checkbox lines: - [ ] item',
     'Do not modify the callout block.',
     '-->',
   ].join('\n');
@@ -528,6 +747,7 @@ export function notionExport(
   text: string,
   video: VideoContent,
   options: NotionExportOptions,
+  citationHints?: readonly { id: number; href?: string }[],
 ): NotionExportResult {
   let result = text;
   let citationsResolved = 0;
@@ -536,39 +756,75 @@ export function notionExport(
   // Line-style (1) headings → checkboxes first (does not interact with citation regex)
   result = convertNumberedParensToCheckboxes(result);
 
+  const inputMode = options.citationInputMode ?? 'plain';
+
   if (options.includeTimestampLinks) {
-    const citations = buildCitationMap(
-      result,
-      video.transcript,
-      video.videoId,
-      video.duration,
-    );
+    const citations =
+      inputMode === 'protected'
+        ? buildCitationMapFromProtected(
+            result,
+            video.transcript,
+            video.videoId,
+            video.duration,
+          )
+        : buildCitationMap(
+            result,
+            video.transcript,
+            video.videoId,
+            video.duration,
+          );
     citationsTotal = citations.length;
     citationsResolved = citations.filter((c) => c.confidence !== 'none').length;
 
-    const citationMap = videoCitationsToCitationMap(citations);
+    let citationMap = videoCitationsToCitationMap(citations);
+
+    // Merge DOM-extracted citation hints (fills gaps when videoContent is unavailable)
+    citationMap = mergeCitationHints(citationMap, citationHints);
+
+    // Recount resolved after merge — any hint-filled entry counts as resolved
+    citationsResolved = Object.keys(citationMap).length;
+
+    // Validate map completeness — warn on missing entries (they become [[MISSING_n]])
+    // Do NOT throw: incomplete maps are expected when videoContent is unavailable
     try {
-      assertCompleteCitationMap(result, citationMap);
+      if (inputMode === 'protected') {
+        assertCompleteCitationMapForProtected(result, citationMap);
+      } else {
+        assertCompleteCitationMap(result, citationMap);
+      }
     } catch (e) {
-      console.error('[VideoLM notion-export]', e);
-      throw e;
+      console.warn('[VideoLM notion-export] Incomplete citation map (some citations will show as MISSING):', e);
+      // Continue — finalizeForNotion will emit [[MISSING_n]] for unmapped citations
     }
 
-    const { text: encapsulated, beforeCount } = encapsulateCitations(result);
-    const protectedPayload = wrapVideoCitationBlock(encapsulated);
     const parityMode = options.citationParityMode ?? 'warn';
 
-    result = finalizeForNotion(protectedPayload, citationMap, {
-      parityMode,
-      appendParityCaution: true,
-      skipOuterFence: false,
-    });
-
-    // Internal sanity: encapsulation count vs decode
-    if (beforeCount !== citationsTotal) {
-      console.warn(
-        `[VideoLM] citation count mismatch: extract ${citationsTotal} vs encapsulate ${beforeCount}`,
-      );
+    if (inputMode === 'protected') {
+      const protectedPayload = wrapVideoCitationTransport(result, citationMap);
+      const beforeTags = collectProtectedCitationMatches(result).length;
+      result = finalizeForNotion(protectedPayload, citationMap, {
+        parityMode,
+        appendParityCaution: true,
+        skipOuterFence: false,
+      });
+      if (beforeTags !== citationsTotal) {
+        console.warn(
+          `[VideoLM] citation count mismatch: resolver ${citationsTotal} vs protected tags ${beforeTags}`,
+        );
+      }
+    } else {
+      const { text: encapsulated, beforeCount } = encapsulateCitations(result);
+      const protectedPayload = wrapVideoCitationTransport(encapsulated, citationMap);
+      result = finalizeForNotion(protectedPayload, citationMap, {
+        parityMode,
+        appendParityCaution: true,
+        skipOuterFence: false,
+      });
+      if (beforeCount !== citationsTotal) {
+        console.warn(
+          `[VideoLM] citation count mismatch: extract ${citationsTotal} vs encapsulate ${beforeCount}`,
+        );
+      }
     }
   }
 
