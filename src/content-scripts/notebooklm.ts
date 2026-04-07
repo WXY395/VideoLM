@@ -39,6 +39,9 @@ let activeQuickFixHost: HTMLElement | null = null;
 /** Concurrency guard — prevents double-submit and UI race conditions */
 let isResolving = false;
 
+/** AbortController for the CTA click handler — ensures clean listener removal */
+let ctaClickAbort: AbortController | null = null;
+
 /**
  * Inject a script string into the page's main world so it can
  * monkey-patch window.fetch (content scripts run in an isolated world).
@@ -537,6 +540,8 @@ async function handleQuickFix(
   // 5. Update UI
   if (nowMissing.length === 0) {
     closeQuickFixPanel();
+    // Clean up CTA handler
+    if (ctaClickAbort) { ctaClickAbort.abort(); ctaClickAbort = null; }
     ctaLabel.textContent = '\u2714';
     const btn = ctaLabel.parentElement!;
     btn.classList.remove('vlm-notion-btn--warning');
@@ -706,15 +711,12 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
       await writeNotionToClipboard(plainText, html);
 
       // ── STEP 6: Feedback — show resolution stats ──
-      const totalCitations = citationMatches.length;
-      const resolvedCount = Object.keys(citationMap).length;
-      const missingCount = totalCitations - resolvedCount;
+      const missingItems = citationSourceNames
+        .filter((csn: { id: number; sourceName: string }) => !citationMap[String(csn.id)])
+        .map((csn: { id: number; sourceName: string }) => ({ id: csn.id, sourceName: csn.sourceName }));
+      const missingCount = missingItems.length;
 
       if (missingCount > 0) {
-        // ── Persistent CTA — Quick Fix entry point ──
-        const missingItems = citationSourceNames
-          .filter((csn: { id: number; sourceName: string }) => !citationMap[String(csn.id)])
-          .map((csn: { id: number; sourceName: string }) => ({ id: csn.id, sourceName: csn.sourceName }));
 
         labelSpan.textContent = `\u26A0 ${missingCount} \u500B\u4F86\u6E90\u7F3A\u5931 \u25BE`;
         btn.classList.add('vlm-notion-btn--warning');
@@ -752,7 +754,11 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
           );
         };
 
-        btn.addEventListener('click', ctaClickHandler);
+        // Remove any previous CTA handler
+        if (ctaClickAbort) ctaClickAbort.abort();
+        ctaClickAbort = new AbortController();
+
+        btn.addEventListener('click', ctaClickHandler, { signal: ctaClickAbort.signal });
       } else {
         // Full success — green checkmark
         labelSpan.textContent = '\u2714'; // ✔
