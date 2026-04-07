@@ -27,6 +27,7 @@ import {
   resolveCitation,
   createVideoSourceRecord,
   findSimilarSources,
+  type SuggestionResult,
 } from '@/utils/source-resolution';
 import { prepareNlmResponseForNotion, writeNotionToClipboard } from './copy-handler';
 import { isYouTubeUrl, extractVideoIdFromUrl } from '@/utils/url-sanitizer';
@@ -388,6 +389,49 @@ const NOTION_BTN_STYLES = `
   .vlm-qf-sug-apply:hover {
     background: color-mix(in srgb, var(--mat-sys-primary, #1a73e8) 10%, transparent);
   }
+  /* ── Weak Candidates (Explain Layer) ── */
+  .vlm-qf-weak {
+    margin: 4px 0;
+    padding: 4px 0;
+    border-top: 1px solid var(--mat-sys-outline-variant, #dadce0);
+    opacity: 0.7;
+  }
+  .vlm-qf-weak-header {
+    font-size: 11px;
+    color: var(--mat-sys-on-surface-variant, #5f6368);
+    margin-bottom: 4px;
+    padding: 0 2px;
+  }
+  .vlm-qf-weak-item {
+    padding: 4px 6px;
+    border-radius: 6px;
+    margin-bottom: 2px;
+    background: color-mix(in srgb, var(--mat-sys-on-surface, #1f1f1f) 4%, transparent);
+  }
+  .vlm-qf-weak-title {
+    font-size: 11px;
+    color: var(--mat-sys-on-surface, #1f1f1f);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 280px;
+  }
+  .vlm-qf-weak-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 2px;
+  }
+  .vlm-qf-weak-reason {
+    font-size: 10px;
+    color: var(--mat-sys-on-surface-variant, #5f6368);
+    font-style: italic;
+  }
+  .vlm-qf-weak-score {
+    font-size: 10px;
+    color: var(--mat-sys-on-surface-variant, #5f6368);
+    font-family: monospace;
+  }
 `;
 
 /** Max retry attempts for finding toolbar (NLM toolbar may render late) */
@@ -417,6 +461,24 @@ document.addEventListener('click', (e) => {
 
   closeQuickFixPanel();
 });
+
+/** Strong suggestion threshold — matches HIGH_CONFIDENCE_THRESHOLD in source-resolution.ts */
+const STRONG_SUGGESTION_THRESHOLD = 0.8;
+/** Weak candidate minimum display threshold */
+const WEAK_CANDIDATE_THRESHOLD = 0.3;
+/** Maximum weak candidates to display */
+const WEAK_CANDIDATE_LIMIT = 2;
+
+/**
+ * Determine a human-readable reason why a candidate didn't reach match threshold.
+ * Pure heuristic on score breakdown — never modifies any score or threshold.
+ */
+function getWeakCandidateReason(sug: SuggestionResult): string {
+  if (sug.tokenOverlap < 0.2) return '\u95DC\u9375\u8A5E\u91CD\u758A\u4E0D\u8DB3'; // 關鍵詞重疊不足
+  if (sug.tokenOverlap > 0 && sug.prefixMatch < 0.3) return '\u6A19\u984C\u90E8\u5206\u4E0D\u4E00\u81F4'; // 標題部分不一致
+  if (sug.prefixMatch > 0.5) return '\u6A19\u984C\u53EF\u80FD\u88AB\u622A\u65B7'; // 標題可能被截斷
+  return '\u63A5\u8FD1\u4F46\u672A\u9054\u5339\u914D\u6A19\u6E96'; // 接近但未達匹配標準
+}
 
 /**
  * Render the Quick Fix panel inside the button's Shadow DOM.
@@ -470,9 +532,15 @@ function showQuickFixPanel(
     div.appendChild(label);
 
     if (isActive) {
-      // ── Suggestion layer: show similar sources from index ──
-      const suggestions = findSimilarSources(item.sourceName, sourceIndex, 3);
-      if (suggestions.length > 0) {
+      // ── Suggestion + Weak Candidate layers ──
+      const allCandidates = findSimilarSources(item.sourceName, sourceIndex, 5);
+      const strongCandidates = allCandidates.filter(s => s.score >= STRONG_SUGGESTION_THRESHOLD);
+      const weakCandidates = allCandidates
+        .filter(s => s.score >= WEAK_CANDIDATE_THRESHOLD && s.score < STRONG_SUGGESTION_THRESHOLD)
+        .slice(0, WEAK_CANDIDATE_LIMIT);
+
+      if (strongCandidates.length > 0) {
+        // ── Strong suggestions: actionable with [套用] button ──
         const sugBlock = document.createElement('div');
         sugBlock.className = 'vlm-qf-suggestions';
 
@@ -481,7 +549,7 @@ function showQuickFixPanel(
         sugTitle.textContent = '\u63A8\u85A6\u4F86\u6E90'; // 推薦來源
         sugBlock.appendChild(sugTitle);
 
-        for (const sug of suggestions) {
+        for (const sug of strongCandidates) {
           const sugItem = document.createElement('div');
           sugItem.className = 'vlm-qf-sug-item';
 
@@ -513,6 +581,49 @@ function showQuickFixPanel(
         }
 
         div.appendChild(sugBlock);
+      } else if (weakCandidates.length > 0) {
+        // ── Weak candidates: explanatory only, no action buttons ──
+        const weakBlock = document.createElement('div');
+        weakBlock.className = 'vlm-qf-weak';
+
+        const weakHeader = document.createElement('div');
+        weakHeader.className = 'vlm-qf-weak-header';
+        weakHeader.textContent = `\u5DF2\u6AA2\u67E5 ${sourceIndex.length} \u500B\u4F86\u6E90\uFF0C\u4F46\u672A\u9054\u63A8\u85A6\u6A19\u6E96`; // 已檢查 N 個來源，但未達推薦標準
+        weakBlock.appendChild(weakHeader);
+
+        const weakSubtitle = document.createElement('div');
+        weakSubtitle.className = 'vlm-qf-weak-header';
+        weakSubtitle.textContent = '\u6700\u63A5\u8FD1\u7684\u4F86\u6E90\uFF08\u672A\u9054\u5339\u914D\u6A19\u6E96\uFF09'; // 最接近的來源（未達匹配標準）
+        weakBlock.appendChild(weakSubtitle);
+
+        for (const sug of weakCandidates) {
+          const weakItem = document.createElement('div');
+          weakItem.className = 'vlm-qf-weak-item';
+
+          const weakTitle = document.createElement('div');
+          weakTitle.className = 'vlm-qf-weak-title';
+          weakTitle.textContent = sug.record.title.slice(0, 45) + (sug.record.title.length > 45 ? '...' : '');
+          weakTitle.title = sug.record.title;
+
+          const weakMeta = document.createElement('div');
+          weakMeta.className = 'vlm-qf-weak-meta';
+
+          const weakReason = document.createElement('span');
+          weakReason.className = 'vlm-qf-weak-reason';
+          weakReason.textContent = getWeakCandidateReason(sug);
+
+          const weakScore = document.createElement('span');
+          weakScore.className = 'vlm-qf-weak-score';
+          weakScore.textContent = `${Math.round(sug.score * 100)}%`;
+
+          weakMeta.appendChild(weakReason);
+          weakMeta.appendChild(weakScore);
+          weakItem.appendChild(weakTitle);
+          weakItem.appendChild(weakMeta);
+          weakBlock.appendChild(weakItem);
+        }
+
+        div.appendChild(weakBlock);
       }
 
       const row = document.createElement('div');

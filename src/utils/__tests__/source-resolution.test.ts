@@ -167,4 +167,80 @@ describe('findSimilarSources', () => {
     expect(results.length).toBe(1);
     expect(results[0].score).toBeGreaterThan(0.5);
   });
+
+  describe('score breakdown fields', () => {
+    it('includes tokenOverlap and prefixMatch in results', () => {
+      const r = makeRecord({ title: 'Claude Cowork 手把手教學完整版' });
+      const results = findSimilarSources('Claude Cowork 教學', [r], 3);
+      expect(results.length).toBeGreaterThanOrEqual(1);
+      const first = results[0];
+      expect(first).toHaveProperty('tokenOverlap');
+      expect(first).toHaveProperty('prefixMatch');
+      expect(typeof first.tokenOverlap).toBe('number');
+      expect(typeof first.prefixMatch).toBe('number');
+      expect(first.tokenOverlap).toBeGreaterThanOrEqual(0);
+      expect(first.tokenOverlap).toBeLessThanOrEqual(1);
+      expect(first.prefixMatch).toBeGreaterThanOrEqual(0);
+      expect(first.prefixMatch).toBeLessThanOrEqual(1);
+    });
+
+    it('high token overlap when query shares many words with record', () => {
+      const r = makeRecord({ title: 'Claude Cowork 手把手教學完整版' });
+      const results = findSimilarSources('Claude Cowork 手把手教學', [r], 3);
+      expect(results[0].tokenOverlap).toBeGreaterThan(0.5);
+    });
+
+    it('low token overlap for unrelated titles', () => {
+      const r = makeRecord({ title: 'Python 機器學習入門基礎教程' });
+      const results = findSimilarSources('Claude AI Agent 開發', [r], 3);
+      // May return empty or low-scoring
+      if (results.length > 0) {
+        expect(results[0].tokenOverlap).toBeLessThan(0.3);
+      }
+    });
+
+    it('high prefix match when titles share a long prefix', () => {
+      const r = makeRecord({ title: 'Claude Code Tutorial Part 1 Complete Guide' });
+      const results = findSimilarSources('Claude Code Tutorial Part 2 Extended', [r], 3);
+      if (results.length > 0) {
+        expect(results[0].prefixMatch).toBeGreaterThan(0.3);
+      }
+    });
+
+    it('combined score equals tokenOverlap*0.6 + prefixMatch*0.3 + 0.1', () => {
+      const r = makeRecord({ title: 'Claude Cowork 手把手教學完整版' });
+      const results = findSimilarSources('Claude Cowork 教學', [r], 3);
+      const first = results[0];
+      const expected = first.tokenOverlap * 0.6 + first.prefixMatch * 0.3 + 0.1;
+      expect(first.score).toBeCloseTo(expected, 10);
+    });
+  });
+
+  describe('strong vs weak candidate filtering (UI-layer thresholds)', () => {
+    const STRONG = 0.8;
+    const WEAK_MIN = 0.3;
+
+    it('exact title produces strong candidate (score >= 0.8)', () => {
+      const r = makeRecord({ title: 'Claude Cowork 手把手教學' });
+      const results = findSimilarSources('Claude Cowork 手把手教學', [r], 3);
+      expect(results.length).toBe(1);
+      expect(results[0].score).toBeGreaterThanOrEqual(STRONG);
+    });
+
+    it('partially similar title produces weak candidate (0.3 <= score < 0.8)', () => {
+      const r = makeRecord({ title: 'Claude Code AI Agent 開發完整教學' });
+      const results = findSimilarSources('Claude Code 入門基礎', [r], 3);
+      const weakCandidates = results.filter(s => s.score >= WEAK_MIN && s.score < STRONG);
+      // Claude Code overlap should produce a weak-range score
+      if (results.length > 0 && results[0].score < STRONG) {
+        expect(results[0].score).toBeGreaterThanOrEqual(WEAK_MIN);
+      }
+    });
+
+    it('completely unrelated title produces no candidates at all', () => {
+      const r = makeRecord({ title: 'Python 數據分析入門' });
+      const results = findSimilarSources('React Native 手機 App 開發', [r], 3);
+      expect(results.length).toBe(0);
+    });
+  });
 });

@@ -93,6 +93,10 @@ const SUGGESTION_THRESHOLD = 0.2;
 export interface SuggestionResult {
   record: VideoSourceRecord;
   score: number;
+  /** Individual token overlap score (0–1) for reason heuristic */
+  tokenOverlap: number;
+  /** Individual prefix match score (0–1) for reason heuristic */
+  prefixMatch: number;
 }
 
 /**
@@ -116,7 +120,7 @@ export function findSimilarSources(
     const prefixScore = prefixMatchScore(normalized, r.normalizedTitle);
     const total = tokenScore * 0.6 + prefixScore * 0.3 + 0.1;
     if (total > SUGGESTION_THRESHOLD) {
-      scored.push({ record: r, score: total });
+      scored.push({ record: r, score: total, tokenOverlap: tokenScore, prefixMatch: prefixScore });
     }
   }
 
