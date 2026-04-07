@@ -352,8 +352,8 @@ const TOOLBAR_RETRY_MS = 500;
  * Close the Quick Fix panel and reset all state.
  * Every close path (toggle, outside click, auto-close) goes through here.
  */
-function closeQuickFixPanel(): void {
-  if (isResolving) return;
+function closeQuickFixPanel(force = false): void {
+  if (!force && isResolving) return;
   if (!activeQuickFixHost) return;
 
   const panel = activeQuickFixHost.shadowRoot?.querySelector('.vlm-qf-panel');
@@ -550,7 +550,7 @@ async function handleQuickFix(
 
   // 5. Update UI
   if (nowMissing.length === 0) {
-    closeQuickFixPanel();
+    closeQuickFixPanel(true);
     // Clean up CTA handler
     if (ctaClickAbort) { ctaClickAbort.abort(); ctaClickAbort = null; }
     ctaLabel.textContent = '\u2714';
