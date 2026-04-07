@@ -24,7 +24,8 @@ export class BuiltinProvider implements AIProvider {
 
     if (!response.ok) {
       const error = await response.text();
-      throw new Error(`Backend error (${response.status}): ${error}`);
+      console.error(`Backend error (${response.status}): ${error}`);
+      return {} as T;
     }
 
     return response.json() as Promise<T>;

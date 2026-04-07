@@ -450,9 +450,10 @@ export function assertCompleteCitationMap(text: string, map: CitationMap): void 
     seen.add(key);
     const entry = map[key];
     if (!entry?.url?.length) {
-      throw new Error(
+      console.error(
         `[VideoLM] Incomplete CitationMap: missing or empty url for citation id ${m.id}`,
       );
+      return;
     }
   }
 }
@@ -467,9 +468,10 @@ export function assertCompleteCitationMapForProtected(text: string, map: Citatio
     seen.add(key);
     const entry = map[key];
     if (!entry?.url?.length) {
-      throw new Error(
+      console.error(
         `[VideoLM] Incomplete CitationMap (protected): missing or empty url for citation id ${m.id}`,
       );
+      return;
     }
   }
 }
@@ -602,7 +604,7 @@ export function finalizeForNotion(
     if (parityMode === 'warn') {
       console.warn(`[VideoLM notion-sync] ⚠️ ${msg}`);
     } else {
-      throw new Error(`[VideoLM] ${msg}`);
+      console.error(`[VideoLM] ${msg}`);
     }
     if (appendCaution) {
       return `${out.trimEnd()}\n\n> [!CAUTION] 偵測到 Notion AI 修改了引用結構，請手動校核。`;

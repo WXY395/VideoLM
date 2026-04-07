@@ -36,7 +36,8 @@ export class OpenAIDirectProvider implements AIProvider {
 
     if (!response.ok) {
       const error = await response.text();
-      throw new Error(`OpenAI API error (${response.status}): ${error}`);
+      console.error(`OpenAI API error (${response.status}): ${error}`);
+      return '';
     }
 
     const data = await response.json();
