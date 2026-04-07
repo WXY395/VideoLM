@@ -14,7 +14,7 @@
 import { FetchInterceptor, type CapturedRequest } from '@/nlm/fetch-interceptor';
 import { DomAutomation } from '@/nlm/dom-automation';
 import { NLM } from '@/config/selectors';
-import type { DynamicConfig, VideoContent } from '@/types';
+import type { DynamicConfig, VideoContent, VideoSourceRecord } from '@/types';
 import {
   collectProtectedCitationMatches,
   wrapVideoCitationTransport,
@@ -26,6 +26,7 @@ import {
   buildFingerprintIndex,
   resolveCitation,
   createVideoSourceRecord,
+  findSimilarSources,
 } from '@/utils/source-resolution';
 import { prepareNlmResponseForNotion, writeNotionToClipboard } from './copy-handler';
 import { isYouTubeUrl, extractVideoIdFromUrl } from '@/utils/url-sanitizer';
@@ -342,6 +343,51 @@ const NOTION_BTN_STYLES = `
     pointer-events: none;
     opacity: 0.7;
   }
+  /* ── Suggestion Layer ── */
+  .vlm-qf-suggestions {
+    margin: 4px 0;
+    padding: 4px 0;
+    border-top: 1px solid var(--mat-sys-outline-variant, #dadce0);
+  }
+  .vlm-qf-suggestions-title {
+    font-size: 11px;
+    color: var(--mat-sys-on-surface-variant, #5f6368);
+    margin-bottom: 4px;
+    padding: 0 2px;
+  }
+  .vlm-qf-sug-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    padding: 3px 4px;
+    border-radius: 6px;
+  }
+  .vlm-qf-sug-item:hover {
+    background: color-mix(in srgb, var(--mat-sys-primary, #1a73e8) 6%, transparent);
+  }
+  .vlm-qf-sug-title {
+    flex: 1;
+    font-size: 11px;
+    color: var(--mat-sys-on-surface, #1f1f1f);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .vlm-qf-sug-apply {
+    all: unset;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    color: var(--mat-sys-primary, #1a73e8);
+    border: 1px solid var(--mat-sys-primary, #1a73e8);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .vlm-qf-sug-apply:hover {
+    background: color-mix(in srgb, var(--mat-sys-primary, #1a73e8) 10%, transparent);
+  }
 `;
 
 /** Max retry attempts for finding toolbar (NLM toolbar may render late) */
@@ -382,6 +428,7 @@ function showQuickFixPanel(
   resolvedItems: Array<{ id: number; sourceName: string }>,
   onSubmit: (citationId: number, sourceName: string, url: string) => Promise<void>,
   host: HTMLElement,
+  sourceIndex: readonly VideoSourceRecord[] = [],
 ): void {
   // Singleton — close any other open panel
   if (activeQuickFixHost && activeQuickFixHost !== host) {
@@ -423,6 +470,51 @@ function showQuickFixPanel(
     div.appendChild(label);
 
     if (isActive) {
+      // ── Suggestion layer: show similar sources from index ──
+      const suggestions = findSimilarSources(item.sourceName, sourceIndex, 3);
+      if (suggestions.length > 0) {
+        const sugBlock = document.createElement('div');
+        sugBlock.className = 'vlm-qf-suggestions';
+
+        const sugTitle = document.createElement('div');
+        sugTitle.className = 'vlm-qf-suggestions-title';
+        sugTitle.textContent = '\u63A8\u85A6\u4F86\u6E90'; // 推薦來源
+        sugBlock.appendChild(sugTitle);
+
+        for (const sug of suggestions) {
+          const sugItem = document.createElement('div');
+          sugItem.className = 'vlm-qf-sug-item';
+
+          const sugLabel = document.createElement('span');
+          sugLabel.className = 'vlm-qf-sug-title';
+          sugLabel.textContent = sug.record.title.slice(0, 45) + (sug.record.title.length > 45 ? '...' : '');
+          sugLabel.title = sug.record.title;
+
+          const applyBtn = document.createElement('button');
+          applyBtn.className = 'vlm-qf-sug-apply';
+          applyBtn.textContent = '\u5957\u7528'; // 套用
+
+          applyBtn.addEventListener('click', async () => {
+            if (isResolving) return;
+
+            isResolving = true;
+            applyBtn.textContent = '\u23F3'; // ⏳
+
+            try {
+              await onSubmit(item.id, item.sourceName, sug.record.url);
+            } finally {
+              isResolving = false;
+            }
+          });
+
+          sugItem.appendChild(sugLabel);
+          sugItem.appendChild(applyBtn);
+          sugBlock.appendChild(sugItem);
+        }
+
+        div.appendChild(sugBlock);
+      }
+
       const row = document.createElement('div');
       row.className = 'vlm-qf-row';
 
@@ -576,6 +668,7 @@ async function handleQuickFix(
         newUrl, sourceName, allCitationSourceNames, protectedText, citationHints, shadow, ctaLabel, host,
       ),
       host,
+      sourceIndex,
     );
   }
 }
@@ -747,6 +840,7 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
         const capturedProtectedText = protectedText;
         const capturedCitationHints = citationHints;
         const capturedCitationSourceNames = citationSourceNames;
+        const capturedSourceIndex = sourceIndex;
 
         // CTA click → toggle Quick Fix panel
         const ctaClickHandler = (e: Event) => {
@@ -768,6 +862,7 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
               host,
             ),
             host,
+            capturedSourceIndex,
           );
         };
 
