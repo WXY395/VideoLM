@@ -1,4 +1,13 @@
-import type { MessageType, VideoContent, ImportOptions, ImportMode, NotionExportOptions } from '@/types';
+// ── Global error handlers: prevent SW crash on unhandled errors ──
+self.addEventListener('unhandledrejection', (e: PromiseRejectionEvent) => {
+  console.error('UNHANDLED PROMISE:', e.reason);
+});
+
+self.addEventListener('error', (e: ErrorEvent) => {
+  console.error('SW ERROR:', e.message);
+});
+
+import type { MessageType, VideoContent, ImportOptions, ImportMode, NotionExportOptions, VideoSourceRecord } from '@/types';
 import { getConfig } from '@/config/dynamic-config';
 import { resolveProvider } from '@/ai/provider-manager';
 import { formatTranscript, extractVideoId, parseXMLCaptions } from '@/extractors/youtube-extractor';
@@ -21,6 +30,8 @@ import { listNlmNotebooks, findMatchingNotebooks, clearNotebookCache, fetchSessi
 import { deduplicateAgainstCache, addToDedupCache, removeFromDedupCache } from './dedup-cache';
 import { YT, NLM } from '@/config/selectors';
 import { notionExport } from '@/utils/notion-sync';
+import { createVideoSourceRecord } from '@/utils/source-resolution';
+import { upsertSourceRecord, loadSourceIndex } from './source-store';
 // dedup-cache is GLOBAL (not per-notebook) — always catches duplicates regardless of notebook matching
 
 // ---------------------------------------------------------------------------
@@ -1304,6 +1315,16 @@ chrome.runtime.onMessage.addListener(
               }
             }
 
+            // Store source record EARLY (before dedup) — even re-imports need the record
+            for (const url of urls.filter(Boolean)) {
+              const vid = extractVideoId(url);
+              if (vid) {
+                const record = createVideoSourceRecord(vid, videoTitle || '', '', url);
+                await upsertSourceRecord(record);
+                console.log(`[VideoLM] Stored source record: ${vid} "${videoTitle}"`);
+              }
+            }
+
             // Global dedup cache — catches duplicates regardless of notebook
             {
               const cacheCheck = await deduplicateAgainstCache(urls.filter(Boolean));
@@ -1810,12 +1831,13 @@ chrome.runtime.onMessage.addListener(
         // Static import — dynamic import() triggers Vite's modulePreload polyfill
         // which uses `document.createElement('link')`, crashing in Service Worker context.
         try {
-          const { content, videoContent, options } = message as any as {
+          const { content, videoContent, options, citationHints } = message as any as {
             content: string;
             videoContent: VideoContent;
             options: NotionExportOptions;
+            citationHints?: Array<{ id: number; href?: string }>;
           };
-          const result = notionExport(content, videoContent, options);
+          const result = notionExport(content, videoContent, options, citationHints);
           sendResponse(result);
         } catch (err) {
           sendResponse({ markdown: '', citationsResolved: 0, citationsTotal: 0, error: String(err) });
@@ -1841,6 +1863,31 @@ chrome.runtime.onMessage.addListener(
             sendResponse({ ok: true });
           } catch (err) {
             sendResponse({ ok: false, error: String(err) });
+          }
+        })();
+        return true;
+      }
+
+      case 'STORE_SOURCE_RECORD': {
+        (async () => {
+          try {
+            const { record } = message as any as { record: VideoSourceRecord };
+            await upsertSourceRecord(record);
+            sendResponse({ ok: true });
+          } catch (err) {
+            sendResponse({ ok: false, error: String(err) });
+          }
+        })();
+        return true;
+      }
+
+      case 'GET_SOURCE_INDEX': {
+        (async () => {
+          try {
+            const index = await loadSourceIndex();
+            sendResponse({ index });
+          } catch (err) {
+            sendResponse({ index: [], error: String(err) });
           }
         })();
         return true;
