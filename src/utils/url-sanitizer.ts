@@ -5,6 +5,16 @@
  * (bundled) and tested independently with Vitest.
  */
 
+const YT_URL_RE = /^https?:\/\/(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)[\w-]+/;
+
+/**
+ * Validate that a string is a YouTube video URL.
+ * Used by Quick Fix panel to prevent source DB pollution.
+ */
+export function isYouTubeUrl(url: string): boolean {
+  return YT_URL_RE.test(url);
+}
+
 /**
  * Extract a YouTube video ID from various URL formats:
  *  - https://www.youtube.com/watch?v=VIDEO_ID&list=...

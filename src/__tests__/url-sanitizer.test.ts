@@ -3,7 +3,54 @@ import {
   sanitizeYouTubeUrl,
   deduplicateUrls,
   extractVideoIdFromUrl,
+  isYouTubeUrl,
 } from '@/utils/url-sanitizer';
+
+// ---------------------------------------------------------------------------
+// isYouTubeUrl
+// ---------------------------------------------------------------------------
+
+describe('isYouTubeUrl', () => {
+  it('accepts standard watch URL', () => {
+    expect(isYouTubeUrl('https://www.youtube.com/watch?v=dQw4w9WgXcQ')).toBe(true);
+  });
+
+  it('accepts short URL', () => {
+    expect(isYouTubeUrl('https://youtu.be/dQw4w9WgXcQ')).toBe(true);
+  });
+
+  it('accepts shorts URL', () => {
+    expect(isYouTubeUrl('https://youtube.com/shorts/dQw4w9WgXcQ')).toBe(true);
+  });
+
+  it('accepts URL with extra params', () => {
+    expect(isYouTubeUrl('https://www.youtube.com/watch?v=abc123&list=PLxyz')).toBe(true);
+  });
+
+  it('accepts http (non-https)', () => {
+    expect(isYouTubeUrl('http://youtube.com/watch?v=abc123')).toBe(true);
+  });
+
+  it('rejects empty string', () => {
+    expect(isYouTubeUrl('')).toBe(false);
+  });
+
+  it('rejects non-YouTube URL', () => {
+    expect(isYouTubeUrl('https://vimeo.com/123456')).toBe(false);
+  });
+
+  it('rejects random text', () => {
+    expect(isYouTubeUrl('not a url')).toBe(false);
+  });
+
+  it('rejects YouTube URL without video ID', () => {
+    expect(isYouTubeUrl('https://youtube.com/watch')).toBe(false);
+  });
+
+  it('rejects YouTube channel URL', () => {
+    expect(isYouTubeUrl('https://youtube.com/@channelname')).toBe(false);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // extractVideoIdFromUrl
