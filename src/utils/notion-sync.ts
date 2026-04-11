@@ -608,10 +608,7 @@ export function finalizeForNotion(
     if (!entry?.url) {
       return `[[MISSING_${idStr}]]`;
     }
-    const label = entry.sourceName
-      ? `[${idStr} \u{1F4FA} ${entry.sourceName.slice(0, 25)}${entry.sourceName.length > 25 ? '…' : ''}]`
-      : `[${idStr}] \u{1F4FA}`;
-    return `[${label}](${entry.url})`;
+    return `[[${idStr}] \u{1F4FA}](${entry.url})`;
   });
 
   const afterCount = countDecodedLinks(out) + countMissingPlaceholders(out);
