@@ -564,22 +564,39 @@ const observer = new MutationObserver(() => {
 
 observer.observe(document.body, { childList: true, subtree: true });
 
+/**
+ * Retry-based injection: YouTube Polymer/Lit components render asynchronously,
+ * so injection targets may not exist immediately. Retry up to 5 times at 500ms.
+ */
+function tryInjectWithRetry(retriesLeft = 5): void {
+  tryInjectButtons();
+  const path = location.pathname;
+  const needsRetry =
+    (path.startsWith('/watch') && !document.getElementById(BUTTON_ID_VIDEO)) ||
+    ((/^\/@[^/]+/.test(path) || path.startsWith('/channel/')) && !document.getElementById(BUTTON_ID_CHANNEL)) ||
+    (path.startsWith('/playlist') && !document.getElementById(BUTTON_ID_PLAYLIST)) ||
+    (path.startsWith('/results') && !document.getElementById(BUTTON_ID_SEARCH));
+  if (needsRetry && retriesLeft > 0) {
+    setTimeout(() => tryInjectWithRetry(retriesLeft - 1), 500);
+  }
+}
+
 // YouTube fires this custom event after SPA navigation completes
 document.addEventListener('yt-navigate-finish', () => {
   removeAllButtons();
-  tryInjectButtons();
+  tryInjectWithRetry();
 });
 
 // Also handle yt-page-data-updated (fires when page data is fully loaded)
 document.addEventListener('yt-page-data-updated', () => {
-  tryInjectButtons();
+  tryInjectWithRetry();
 });
 
 // Initial injection for hard page loads
-tryInjectButtons();
+tryInjectWithRetry();
 
 // ---------------------------------------------------------------------------
-// Heartbeat — safety net every 2s for cases where observer misses
+// Heartbeat — safety net every 1s for cases where observer misses
 // H-2 FIX: Store interval ID + reduce frequency. Clear on extension invalidation.
 // ---------------------------------------------------------------------------
 const heartbeatId = setInterval(() => {
@@ -610,4 +627,4 @@ const heartbeatId = setInterval(() => {
   if (path.startsWith('/results') && !document.getElementById(BUTTON_ID_SEARCH)) {
     injectSearchButton();
   }
-}, 2000);
+}, 1000);

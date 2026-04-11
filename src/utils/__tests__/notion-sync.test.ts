@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildCitationMap,
+  buildCitationMapFromProtected,
   injectCitationLinks,
   convertActionItems,
   buildCalloutBlock,
@@ -8,6 +9,8 @@ import {
   citationRegex,
   encapsulateCitations,
   wrapVideoCitationBlock,
+  wrapVideoCitationTransport,
+  stripVideoCitationFence,
   finalizeForNotion,
   videoCitationsToCitationMap,
   convertNumberedParensToCheckboxes,
@@ -23,6 +26,9 @@ const makeSegments = (entries: Array<[number, string]>): TranscriptSegment[] =>
 
 const VIDEO_ID = 'dQw4w9WgXcQ';
 const VIDEO_DURATION = 600; // 10 minutes
+
+/** Header prepended by finalizeForNotion / injectCitationLinks */
+const HEADER_PREFIX = '> \u26A0\uFE0F 改寫規則：所有 [n \u{1F4FA}](URL) 為 YouTube 影片來源連結，改寫時必須保留完整 markdown 連結格式，不可移除 URL。';
 
 const sampleSegments = makeSegments([
   [0, 'Welcome to the video today we will learn about algorithms'],
@@ -201,7 +207,7 @@ describe('injectCitationLinks', () => {
     const result = injectCitationLinks('The speaker says [1] here.', citations);
 
     expect(result).toBe(
-      `The speaker says [[1] \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}&t=90s) here.`,
+      `${HEADER_PREFIX}\nThe speaker says [[1] \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}&t=90s) here.`,
     );
   });
 
@@ -223,7 +229,7 @@ describe('injectCitationLinks', () => {
     const result = injectCitationLinks('Reference [1] here.', citations);
 
     expect(result).toBe(
-      `Reference [[1] \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}) here.`,
+      `${HEADER_PREFIX}\nReference [[1] \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}) here.`,
     );
   });
 
@@ -246,12 +252,12 @@ describe('injectCitationLinks', () => {
     const result = injectCitationLinks('Ref [1] and [2] here.', citations);
 
     expect(result).toContain(`[[1] \u{1F4FA}]`);
-    expect(result).toContain('[[MISSING_CITATION_2]]');
+    expect(result).toContain('[[MISSING_2]]');
   });
 
-  it('no citations returns text unchanged', () => {
+  it('no citations returns text unchanged (with header)', () => {
     const result = injectCitationLinks('No citations here.', []);
-    expect(result).toBe('No citations here.');
+    expect(result).toBe(`${HEADER_PREFIX}\nNo citations here.`);
   });
 });
 
@@ -526,18 +532,42 @@ describe('Citation-safe transport', () => {
       { id: 1, timestamp: 10, videoId: 'abc', confidence: 'exact' },
       { id: 2, timestamp: 0, videoId: 'abc', confidence: 'none' },
     ]);
-    const wrapped = wrapVideoCitationBlock(enc);
+    const wrapped = wrapVideoCitationTransport(enc, map);
+    expect(wrapped).toContain('VIDEO_CITATION_BLOCK_v1_DO_NOT_TOUCH__SYSTEM');
+    expect(wrapped).toContain('<!-- CITATION_MAP');
+    const stripped = stripVideoCitationFence(wrapped);
+    expect(stripped).toContain('<VIDEO_CITATION id="1"/>');
     const out = finalizeForNotion(wrapped, map);
     expect(out).toContain('[[1] \u{1F4FA}](https://youtube.com/watch?v=abc&t=10s)');
     expect(out).toContain('[[2] \u{1F4FA}](https://youtube.com/watch?v=abc)');
     expect(out).not.toContain('VIDEO_CITATION_BLOCK');
   });
 
+  it('buildCitationMapFromProtected resolves timestamps like plain buildCitationMap', () => {
+    const text =
+      'At [01:30] the speaker explains merge sort <VIDEO_CITATION id="1"/> in detail.';
+    const result = buildCitationMapFromProtected(
+      text,
+      sampleSegments,
+      VIDEO_ID,
+      VIDEO_DURATION,
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ id: 1, timestamp: 90, confidence: 'exact' });
+  });
+
+  it('wrapVideoCitationBlock is fence-only (no CITATION_MAP comment)', () => {
+    const enc = 'x <VIDEO_CITATION id="1"/>';
+    const s = wrapVideoCitationBlock(enc);
+    expect(s).toContain('VIDEO_CITATION_BLOCK_v1_DO_NOT_TOUCH__SYSTEM');
+    expect(s).not.toContain('CITATION_MAP');
+  });
+
   it('finalize decodes tolerant tag spacing / case', () => {
     const body = 'x <VIDEO_CITATION  id="7" /> y';
     const map = { '7': { url: 'https://youtube.com/watch?v=z' } };
     const out = finalizeForNotion(body, map, { skipOuterFence: true });
-    expect(out).toBe('x [[7] \u{1F4FA}](https://youtube.com/watch?v=z) y');
+    expect(out).toBe(`${HEADER_PREFIX}\nx [[7] \u{1F4FA}](https://youtube.com/watch?v=z) y`);
   });
 
   it('convertNumberedParensToCheckboxes: line (n) with n≤20 only', () => {

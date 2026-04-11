@@ -50,6 +50,12 @@ const VIDEO_CITATION_FENCE_PATTERNS = [
 
 const CITATION_MAP_COMMENT_RE = /\n?<!--\s*CITATION_MAP[\s\S]*?-->\s*$/i;
 
+/** Header instruction embedded in clipboard output to protect citation links during Notion AI processing */
+const NOTION_CITATION_HEADER =
+  '> \u26A0\uFE0F 改寫規則：所有 [n \u{1F4FA}](URL) 為 YouTube 影片來源連結，改寫時必須保留完整 markdown 連結格式，不可移除 URL。';
+const NOTION_CITATION_HEADER_HTML =
+  '<blockquote>\u26A0\uFE0F 改寫規則：所有 [n \u{1F4FA}](URL) 為 YouTube 影片來源連結，改寫時必須保留完整 markdown 連結格式，不可移除 URL。</blockquote>';
+
 /** Structured map: id → resolved YouTube URL (+ optional timestamp in seconds) */
 export type CitationConfidence = 'high' | 'medium' | 'low';
 
@@ -63,6 +69,8 @@ export type CitationMap = {
     confidence?: CitationConfidence;
     /** Whether the citation was successfully resolved or remains unresolved */
     status?: CitationStatus;
+    /** Original source name from NLM citation chip (for inline link display) */
+    sourceName?: string;
   };
 };
 
@@ -600,7 +608,10 @@ export function finalizeForNotion(
     if (!entry?.url) {
       return `[[MISSING_${idStr}]]`;
     }
-    return `[[${idStr}] \u{1F4FA}](${entry.url})`;
+    const label = entry.sourceName
+      ? `[${idStr} \u{1F4FA} ${entry.sourceName.slice(0, 25)}${entry.sourceName.length > 25 ? '…' : ''}]`
+      : `[${idStr}] \u{1F4FA}`;
+    return `[${label}](${entry.url})`;
   });
 
   const afterCount = countDecodedLinks(out) + countMissingPlaceholders(out);
@@ -612,11 +623,11 @@ export function finalizeForNotion(
       console.error(`[VideoLM] ${msg}`);
     }
     if (appendCaution) {
-      return `${out.trimEnd()}\n\n> [!CAUTION] 偵測到 Notion AI 修改了引用結構，請手動校核。`;
+      return `${NOTION_CITATION_HEADER}\n${out.trimEnd()}\n\n> [!CAUTION] 偵測到 Notion AI 修改了引用結構，請手動校核。`;
     }
   }
 
-  return out;
+  return `${NOTION_CITATION_HEADER}\n${out}`;
 }
 
 /**

@@ -721,13 +721,10 @@ async function handleQuickFix(
       const algoConfidence = match.type === 'matched' ? 'high' as const
         : match.type === 'uncertain' ? 'medium' as const
         : 'low' as const;
-      citationMap[String(csn.id)] = { url: match.record.url, confidence: algoConfidence, status: 'resolved' };
+      citationMap[String(csn.id)] = { url: match.record.url, confidence: algoConfidence, status: 'resolved', sourceName: csn.sourceName };
     }
 
     // ── User-provided source override (confidence-based) ──
-    // If this citation matches the source the user just fixed, and algorithmic
-    // matching still failed, trust the user's explicit action over the algorithm.
-    // This prevents the resolution loop: ask → user provides → still not_found → ask again.
     const key = String(csn.id);
     console.log("SOURCE_OVERRIDE_APPLIED", {
       key,
@@ -735,7 +732,7 @@ async function handleQuickFix(
       hasExisting: !!citationMap[key]?.url
     });
     if (!citationMap[key]?.url && csn.sourceName === fixingSourceName) {
-      citationMap[key] = { url, confidence: 'medium', status: 'resolved' };
+      citationMap[key] = { url, confidence: 'medium', status: 'resolved', sourceName: csn.sourceName };
       console.log(`[VideoLM] QuickFix user-override ${csn.id}: "${csn.sourceName.slice(0, 30)}" → accepted (confidence: medium)`);
     } else {
       console.log(`[VideoLM] QuickFix re-resolve ${csn.id}: "${csn.sourceName.slice(0, 30)}" → ${match.type} (${match.score.toFixed(2)})`);
@@ -755,7 +752,9 @@ async function handleQuickFix(
   for (const csn of allCitationSourceNames) {
     const key = String(csn.id);
     if (citationMap[key] === undefined) {
-      citationMap[key] = createFallbackEntry();
+      citationMap[key] = { ...createFallbackEntry(), sourceName: csn.sourceName };
+    } else if (!citationMap[key].sourceName) {
+      citationMap[key].sourceName = csn.sourceName;
     }
   }
 
@@ -950,7 +949,7 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
           const confidence = match.type === 'matched' ? 'high' as const
             : match.type === 'uncertain' ? 'medium' as const
             : 'low' as const;
-          citationMap[String(csn.id)] = { url: match.record.url, confidence, status: 'resolved' };
+          citationMap[String(csn.id)] = { url: match.record.url, confidence, status: 'resolved', sourceName: csn.sourceName };
         }
         console.log(`[VideoLM] Citation ${csn.id}: "${csn.sourceName.slice(0, 30)}" → ${match.type} (${match.score.toFixed(2)})`);
       }
@@ -968,7 +967,9 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
       for (const csn of citationSourceNames) {
         const key = String(csn.id);
         if (citationMap[key] === undefined) {
-          citationMap[key] = createFallbackEntry();
+          citationMap[key] = { ...createFallbackEntry(), sourceName: csn.sourceName };
+        } else if (!citationMap[key].sourceName) {
+          citationMap[key].sourceName = csn.sourceName;
         }
       }
 
@@ -1096,31 +1097,40 @@ function sendMsgAsync<T = any>(msg: any): Promise<T> {
 }
 
 /**
- * Retrieve the most recently stored videoContent from chrome.storage.session.
- * Returns null if nothing stored or expired (> 30 min).
+ * Retrieve the most recently stored videoContent.
+ * Tries chrome.storage.session first (fast, in-memory), then falls back to
+ * chrome.storage.local (persists across extension reloads).
+ * Returns null if nothing stored or expired (> 24 hours for local, 30 min for session).
  */
 async function getStoredVideoContent(): Promise<VideoContent | null> {
-  try {
-    // Try current tab's ID first, then fall back to scanning all keys
-    const allData = await chrome.storage.session.get(null);
-    let best: { videoContent: VideoContent; storedAt: number } | null = null;
-
-    for (const [key, value] of Object.entries(allData)) {
-      if (key.startsWith('_videolm_lastVideo_') && value?.videoContent) {
-        const entry = value as { videoContent: VideoContent; storedAt: number };
-        // Skip entries older than 30 minutes
-        if (Date.now() - entry.storedAt > 30 * 60 * 1000) continue;
-        // Keep the most recent entry
-        if (!best || entry.storedAt > best.storedAt) {
-          best = entry;
+  // Helper to scan a storage area for the best (most recent) entry
+  const scan = async (
+    area: chrome.storage.StorageArea,
+    maxAge: number,
+  ): Promise<{ videoContent: VideoContent; storedAt: number } | null> => {
+    try {
+      const allData = await area.get(null);
+      let best: { videoContent: VideoContent; storedAt: number } | null = null;
+      for (const [key, value] of Object.entries(allData)) {
+        if (key.startsWith('_videolm_lastVideo_') && value?.videoContent) {
+          const entry = value as { videoContent: VideoContent; storedAt: number };
+          if (Date.now() - entry.storedAt > maxAge) continue;
+          if (!best || entry.storedAt > best.storedAt) best = entry;
         }
       }
+      return best;
+    } catch {
+      return null;
     }
+  };
 
-    return best?.videoContent ?? null;
-  } catch {
-    return null;
-  }
+  // 1. Try session storage (30 min TTL)
+  const session = await scan(chrome.storage.session, 30 * 60 * 1000);
+  if (session) return session.videoContent;
+
+  // 2. Fall back to local storage (24 hour TTL — survives extension reload)
+  const local = await scan(chrome.storage.local, 24 * 60 * 60 * 1000);
+  return local?.videoContent ?? null;
 }
 
 /**
@@ -1155,6 +1165,36 @@ let responseObserver: MutationObserver | null = null;
  *   2. When a response container appears, wait for streaming to stabilize
  *      (no mutations for STREAM_STABLE_MS) before injecting the button
  */
+// Track which response elements already have buttons (module-level for re-scan)
+const processedCards = new WeakSet<Element>();
+
+/**
+ * Scan for AI response cards and inject Notion button on any new ones.
+ * Safe to call repeatedly — skips already-processed cards via WeakSet.
+ */
+function scanAndInject(): void {
+  const responseCards = qfAll(NLM.RESPONSE_CARD);
+  for (const card of responseCards) {
+    if (processedCards.has(card)) continue;
+    processedCards.add(card);
+    injectNotionButton(card);
+  }
+}
+
+// Debounced scan — waits for streaming to finish
+function debouncedScan(): void {
+  if (streamStableTimer) clearTimeout(streamStableTimer);
+  streamStableTimer = setTimeout(() => {
+    if (!isNotebookPage()) return;
+    const isStillLoading = qf(NLM.RESPONSE_LOADING);
+    if (isStillLoading) {
+      debouncedScan();
+      return;
+    }
+    scanAndInject();
+  }, STREAM_STABLE_MS);
+}
+
 function startResponseObserver(): void {
   if (responseObserver) return;
   if (!isNotebookPage()) {
@@ -1162,48 +1202,13 @@ function startResponseObserver(): void {
     return;
   }
 
-  // Track which response elements already have buttons
-  const processed = new WeakSet<Element>();
-
-  /**
-   * Scan for AI response cards and inject Notion button on any new ones.
-   * Uses mat-card.to-user-message-card-content (verified 2026-04-06).
-   */
-  function scanAndInject(): void {
-    const responseCards = qfAll(NLM.RESPONSE_CARD);
-    for (const card of responseCards) {
-      if (processed.has(card)) continue;
-      processed.add(card);
-      injectNotionButton(card);
-    }
-  }
-
-  // Debounced scan — waits for streaming to finish
-  function debouncedScan(): void {
-    if (streamStableTimer) clearTimeout(streamStableTimer);
-    streamStableTimer = setTimeout(() => {
-      // SPA may have navigated away from notebook page
-      if (!isNotebookPage()) return;
-      // Double-check: no loading indicator present
-      const isStillLoading = qf(NLM.RESPONSE_LOADING);
-      if (isStillLoading) {
-        // Still streaming — wait another round
-        debouncedScan();
-        return;
-      }
-      scanAndInject();
-    }, STREAM_STABLE_MS);
-  }
-
   responseObserver = new MutationObserver((mutations) => {
-    // Check if any mutation involves response-related elements
     let relevant = false;
     for (const m of mutations) {
       if (m.type === 'childList' && m.addedNodes.length > 0) {
         relevant = true;
         break;
       }
-      // Text content changes within existing response elements (streaming)
       if (m.type === 'characterData') {
         relevant = true;
         break;
@@ -1212,7 +1217,6 @@ function startResponseObserver(): void {
     if (relevant) debouncedScan();
   });
 
-  // Observe the entire body for structural changes + text streaming
   responseObserver.observe(document.body, {
     childList: true,
     subtree: true,
@@ -1226,27 +1230,29 @@ function startResponseObserver(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Startup — URL-gated with SPA navigation support
+// Startup — URL-gated with SPA navigation support + retry
 // ---------------------------------------------------------------------------
 
-function tryStartObserver(): void {
-  if (isNotebookPage()) {
-    startResponseObserver();
+/** Retry-based startup: if no cards found yet, retry a few times */
+function scanWithRetry(retriesLeft = 3): void {
+  if (!isNotebookPage()) return;
+  startResponseObserver();
+  const cards = qfAll(NLM.RESPONSE_CARD);
+  if (cards.length === 0 && retriesLeft > 0) {
+    setTimeout(() => scanWithRetry(retriesLeft - 1), 1500);
   }
 }
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => setTimeout(tryStartObserver, 1500));
+  document.addEventListener('DOMContentLoaded', () => setTimeout(() => scanWithRetry(), 1500));
 } else {
-  // Small delay to let NLM Angular app render initial content
-  setTimeout(tryStartObserver, 1500);
+  setTimeout(() => scanWithRetry(), 1500);
 }
 
 // Handle SPA navigation — NLM uses Angular router, URL changes without reload.
-// Navigation API is available in Chrome 102+ (extension minimum is well above this).
 if ('navigation' in window) {
   (window as any).navigation.addEventListener('navigateSuccess', () => {
-    tryStartObserver();
+    setTimeout(() => scanWithRetry(), 1000);
   });
 }
 
