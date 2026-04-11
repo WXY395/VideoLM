@@ -27,14 +27,19 @@ const TIMESTAMP_PROXIMITY = 200;
 const FUZZY_WINDOW_SECONDS = 180;
 const MONOTONIC_REVERSE_LIMIT = 600;
 
-/** Resolved citation links: `[[n] 📺](url)` */
-const DECODED_CITATION_LINK_RE = /\[\[(\d+)\]\s*\u{1F4FA}\]\([^)]+\)/gu;
+/** Resolved citation links: `[n 📺 Name](url)` (new) or `[[n] 📺](url)` (legacy) */
+const DECODED_CITATION_LINK_RE = /\[(\d+)\s*\u{1F4FA}[^\]]*\]\([^)]+\)/gu;
 
 /**
  * Citation extraction: `[n]` OR bare `n` (1–3 digits) when delimited by whitespace + punctuation.
  * `\d{1,3}` supports long talks with 100+ source indices without overflow.
  */
 export const citationRegex = /(?:\[(\d+)\]|(?<=\s)(\d{1,3})(?=[\s.,;)]))/g;
+
+/** Quick check: does text contain NLM-style `[n]` citation patterns? */
+function hasCitationPatterns(text: string): boolean {
+  return /\[\d{1,3}\]/.test(text);
+}
 
 /** Tolerant decoder for `<VIDEO_CITATION />` after Notion AI whitespace / case drift */
 const VIDEO_CITATION_TAG_RE =
@@ -48,8 +53,13 @@ export type CitationMap = {
   [id: string]: {
     url: string;
     timestamp?: number;
+    sourceName?: string;
   };
 };
+
+/** Prepended to clipboard output — explicit rewrite rule that Notion AI follows */
+const NOTION_CITATION_HEADER =
+  '> \u26A0\uFE0F 改寫規則：所有 [n \u{1F4FA}](URL) 為 YouTube 影片來源連結，改寫時必須保留完整 markdown 連結格式，不可移除 URL。';
 
 export interface FinalizeNotionOptions {
   /** Default `warn` */
@@ -382,8 +392,9 @@ function countMissingPlaceholders(markdown: string): number {
   return n;
 }
 
+
 /**
- * Decode `<VIDEO_CITATION id="n"/>` → `[[n] 📺](url)` with tolerant tag matching.
+ * Decode `<VIDEO_CITATION id="n"/>` → `[n 📺 Name](url)` with tolerant tag matching.
  */
 export function finalizeForNotion(
   text: string,
@@ -410,10 +421,14 @@ export function finalizeForNotion(
       );
       return `[[MISSING_CITATION_${idStr}]]`;
     }
-    return `[[${idStr}] \u{1F4FA}](${entry.url})`;
+    const label = entry.sourceName
+      ? `${idStr} \u{1F4FA} ${entry.sourceName.slice(0, 25)}${entry.sourceName.length > 25 ? '\u2026' : ''}`
+      : `${idStr} \u{1F4FA}`;
+    return `[${label}](${entry.url})`;
   });
 
   const afterCount = countDecodedLinks(out) + countMissingPlaceholders(out);
+  let cautionSuffix = '';
   if (beforeDecodeCount !== afterCount) {
     const msg = `⚠️ 引文遺失: expected ${beforeDecodeCount} citation slot(s), got ${afterCount} after decode (parity)`;
     if (parityMode === 'warn') {
@@ -422,11 +437,12 @@ export function finalizeForNotion(
       throw new Error(`[VideoLM] ${msg}`);
     }
     if (appendCaution) {
-      return `${out.trimEnd()}\n\n> [!CAUTION] 偵測到 Notion AI 修改了引用結構，請手動校核。`;
+      cautionSuffix = '\n\n> [!CAUTION] 偵測到 Notion AI 修改了引用結構，請手動校核。';
     }
   }
 
-  return out;
+  // Build reference index table from resolved citations
+  return `${NOTION_CITATION_HEADER}\n${out.trimEnd()}${cautionSuffix}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -547,6 +563,10 @@ export function notionExport(
     citationsResolved = citations.filter((c) => c.confidence !== 'none').length;
 
     const citationMap = videoCitationsToCitationMap(citations);
+    // Populate sourceName from video title for inline citation labels
+    for (const key of Object.keys(citationMap)) {
+      citationMap[key].sourceName = video.title;
+    }
     try {
       assertCompleteCitationMap(result, citationMap);
     } catch (e) {
@@ -574,6 +594,13 @@ export function notionExport(
 
   if (options.includeCheckboxes) {
     result = convertActionItems(result);
+  }
+
+  // Always prepend citation header when text contains [n] patterns,
+  // even without videoContent (e.g. after extension reload clears session storage).
+  // When includeTimestampLinks is true, the header is already added by finalizeForNotion.
+  if (!options.includeTimestampLinks && hasCitationPatterns(result)) {
+    result = `${NOTION_CITATION_HEADER}\n${result}`;
   }
 
   if (options.includeCallout) {

@@ -19,6 +19,40 @@ import type { DynamicConfig, NotionExportOptions, NotionExportResult, VideoConte
 let fetchInterceptor: FetchInterceptor | null = null;
 let domAutomation: DomAutomation | null = null;
 
+/** Result of extracting text with citation info from NLM response DOM */
+interface CitationExtraction {
+  text: string;
+  /** Map of citation id → source name from aria-label */
+  sourceNames: Map<string, string>;
+}
+
+/**
+ * Extract text from an NLM response element, restoring citation brackets
+ * and collecting source names from aria-label attributes.
+ *
+ * NLM renders citations as `<span aria-label="n: SourceName">n</span>`.
+ * Plain `.textContent` loses the `[n]` brackets that our citation pipeline expects.
+ * This function clones the subtree, wraps citation spans in brackets, and
+ * collects the source name mapping for building a reference table.
+ */
+function extractTextWithCitations(el: Element): CitationExtraction {
+  const clone = el.cloneNode(true) as Element;
+  const citeSpans = clone.querySelectorAll('span[aria-label]');
+  const sourceNames = new Map<string, string>();
+  for (const span of citeSpans) {
+    const label = span.getAttribute('aria-label') || '';
+    // NLM citation aria-label format: "n: Source Title"
+    const match = label.match(/^(\d+):\s+(.+)/);
+    if (match) {
+      span.textContent = `[${span.textContent?.trim()}]`;
+      if (!sourceNames.has(match[1])) {
+        sourceNames.set(match[1], match[2]);
+      }
+    }
+  }
+  return { text: clone.textContent?.trim() || '', sourceNames };
+}
+
 /**
  * Inject a script string into the page's main world so it can
  * monkey-patch window.fetch (content scripts run in an isolated world).
@@ -310,7 +344,9 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
 
     try {
       // 1. Read the response text from mat-card-content (fresh read, not stale closure)
-      const responseText = (textEl ?? cardEl).textContent?.trim() || '';
+      //    NLM renders citations as <span aria-label="n: SourceName">n</span>.
+      //    Plain .textContent loses the brackets, so we clone + restore [n] format first.
+      const { text: responseText, sourceNames } = extractTextWithCitations(textEl ?? cardEl);
       if (!responseText) {
         labelSpan.textContent = '\u2718'; // ✘
         btn.classList.add('vlm-notion-btn--error');
@@ -325,7 +361,7 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
       let pageTitle = 'Unknown Video';
       try { pageTitle = document.title.replace(/ - NotebookLM$/, '').trim() || pageTitle; } catch {}
 
-      // 3. Get stored videoContent from session storage
+      // 3. Get stored videoContent from session/local storage
       const videoContent = await getStoredVideoContent();
 
       // 4. Run Notion export via service worker
@@ -389,31 +425,40 @@ function sendMsgAsync<T = any>(msg: any): Promise<T> {
 }
 
 /**
- * Retrieve the most recently stored videoContent from chrome.storage.session.
- * Returns null if nothing stored or expired (> 30 min).
+ * Retrieve the most recently stored videoContent.
+ * Tries chrome.storage.session first (fast, in-memory), then falls back to
+ * chrome.storage.local (persists across extension reloads).
+ * Returns null if nothing stored or expired (> 24 hours for local, 30 min for session).
  */
 async function getStoredVideoContent(): Promise<VideoContent | null> {
-  try {
-    // Try current tab's ID first, then fall back to scanning all keys
-    const allData = await chrome.storage.session.get(null);
-    let best: { videoContent: VideoContent; storedAt: number } | null = null;
-
-    for (const [key, value] of Object.entries(allData)) {
-      if (key.startsWith('_videolm_lastVideo_') && value?.videoContent) {
-        const entry = value as { videoContent: VideoContent; storedAt: number };
-        // Skip entries older than 30 minutes
-        if (Date.now() - entry.storedAt > 30 * 60 * 1000) continue;
-        // Keep the most recent entry
-        if (!best || entry.storedAt > best.storedAt) {
-          best = entry;
+  // Helper to scan a storage area for the best (most recent) entry
+  const scan = async (
+    area: chrome.storage.StorageArea,
+    maxAge: number,
+  ): Promise<{ videoContent: VideoContent; storedAt: number } | null> => {
+    try {
+      const allData = await area.get(null);
+      let best: { videoContent: VideoContent; storedAt: number } | null = null;
+      for (const [key, value] of Object.entries(allData)) {
+        if (key.startsWith('_videolm_lastVideo_') && value?.videoContent) {
+          const entry = value as { videoContent: VideoContent; storedAt: number };
+          if (Date.now() - entry.storedAt > maxAge) continue;
+          if (!best || entry.storedAt > best.storedAt) best = entry;
         }
       }
+      return best;
+    } catch {
+      return null;
     }
+  };
 
-    return best?.videoContent ?? null;
-  } catch {
-    return null;
-  }
+  // 1. Try session storage (30 min TTL)
+  const session = await scan(chrome.storage.session, 30 * 60 * 1000);
+  if (session) return session.videoContent;
+
+  // 2. Fall back to local storage (24 hour TTL — survives extension reload)
+  const local = await scan(chrome.storage.local, 24 * 60 * 60 * 1000);
+  return local?.videoContent ?? null;
 }
 
 /**
@@ -448,6 +493,36 @@ let responseObserver: MutationObserver | null = null;
  *   2. When a response container appears, wait for streaming to stabilize
  *      (no mutations for STREAM_STABLE_MS) before injecting the button
  */
+// Track which response elements already have buttons (module-level for re-scan)
+const processedCards = new WeakSet<Element>();
+
+/**
+ * Scan for AI response cards and inject Notion button on any new ones.
+ * Safe to call repeatedly — skips already-processed cards via WeakSet.
+ */
+function scanAndInject(): void {
+  const responseCards = qfAll(NLM.RESPONSE_CARD);
+  for (const card of responseCards) {
+    if (processedCards.has(card)) continue;
+    processedCards.add(card);
+    injectNotionButton(card);
+  }
+}
+
+// Debounced scan — waits for streaming to finish
+function debouncedScan(): void {
+  if (streamStableTimer) clearTimeout(streamStableTimer);
+  streamStableTimer = setTimeout(() => {
+    if (!isNotebookPage()) return;
+    const isStillLoading = qf(NLM.RESPONSE_LOADING);
+    if (isStillLoading) {
+      debouncedScan();
+      return;
+    }
+    scanAndInject();
+  }, STREAM_STABLE_MS);
+}
+
 function startResponseObserver(): void {
   if (responseObserver) return;
   if (!isNotebookPage()) {
@@ -455,48 +530,13 @@ function startResponseObserver(): void {
     return;
   }
 
-  // Track which response elements already have buttons
-  const processed = new WeakSet<Element>();
-
-  /**
-   * Scan for AI response cards and inject Notion button on any new ones.
-   * Uses mat-card.to-user-message-card-content (verified 2026-04-06).
-   */
-  function scanAndInject(): void {
-    const responseCards = qfAll(NLM.RESPONSE_CARD);
-    for (const card of responseCards) {
-      if (processed.has(card)) continue;
-      processed.add(card);
-      injectNotionButton(card);
-    }
-  }
-
-  // Debounced scan — waits for streaming to finish
-  function debouncedScan(): void {
-    if (streamStableTimer) clearTimeout(streamStableTimer);
-    streamStableTimer = setTimeout(() => {
-      // SPA may have navigated away from notebook page
-      if (!isNotebookPage()) return;
-      // Double-check: no loading indicator present
-      const isStillLoading = qf(NLM.RESPONSE_LOADING);
-      if (isStillLoading) {
-        // Still streaming — wait another round
-        debouncedScan();
-        return;
-      }
-      scanAndInject();
-    }, STREAM_STABLE_MS);
-  }
-
   responseObserver = new MutationObserver((mutations) => {
-    // Check if any mutation involves response-related elements
     let relevant = false;
     for (const m of mutations) {
       if (m.type === 'childList' && m.addedNodes.length > 0) {
         relevant = true;
         break;
       }
-      // Text content changes within existing response elements (streaming)
       if (m.type === 'characterData') {
         relevant = true;
         break;
@@ -505,16 +545,13 @@ function startResponseObserver(): void {
     if (relevant) debouncedScan();
   });
 
-  // Observe the entire body for structural changes + text streaming
   responseObserver.observe(document.body, {
     childList: true,
     subtree: true,
     characterData: true,
   });
 
-  // Initial scan for any responses already on the page
   scanAndInject();
-
   console.log('VideoLM: NLM response observer started');
 }
 
@@ -522,24 +559,29 @@ function startResponseObserver(): void {
 // Startup — URL-gated with SPA navigation support
 // ---------------------------------------------------------------------------
 
-function tryStartObserver(): void {
-  if (isNotebookPage()) {
-    startResponseObserver();
+/** Re-scan for response cards with retry — handles slow Angular rendering */
+function scanWithRetry(retriesLeft = 3): void {
+  if (!isNotebookPage()) return;
+  startResponseObserver(); // idempotent — starts observer if not already running
+
+  const cards = qfAll(NLM.RESPONSE_CARD);
+  if (cards.length === 0 && retriesLeft > 0) {
+    setTimeout(() => scanWithRetry(retriesLeft - 1), 1500);
   }
 }
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => setTimeout(tryStartObserver, 1500));
+  document.addEventListener('DOMContentLoaded', () => setTimeout(() => scanWithRetry(), 1500));
 } else {
-  // Small delay to let NLM Angular app render initial content
-  setTimeout(tryStartObserver, 1500);
+  setTimeout(() => scanWithRetry(), 1500);
 }
 
 // Handle SPA navigation — NLM uses Angular router, URL changes without reload.
 // Navigation API is available in Chrome 102+ (extension minimum is well above this).
 if ('navigation' in window) {
   (window as any).navigation.addEventListener('navigateSuccess', () => {
-    tryStartObserver();
+    // Force re-scan on SPA navigation (new notebook may have different responses)
+    setTimeout(() => scanWithRetry(), 1000);
   });
 }
 

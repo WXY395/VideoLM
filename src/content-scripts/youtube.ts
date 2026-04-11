@@ -564,19 +564,35 @@ const observer = new MutationObserver(() => {
 
 observer.observe(document.body, { childList: true, subtree: true });
 
+// Aggressive retry — YouTube Polymer components render asynchronously,
+// so the injection target might not exist on first attempt.
+function tryInjectWithRetry(retriesLeft = 5): void {
+  tryInjectButtons();
+  // If the button for the current page type wasn't injected, retry
+  const path = location.pathname;
+  const needsRetry =
+    (path.startsWith('/watch') && !document.getElementById(BUTTON_ID_VIDEO)) ||
+    ((/^\/@[^/]+/.test(path) || path.startsWith('/channel/')) && !document.getElementById(BUTTON_ID_CHANNEL)) ||
+    (path.startsWith('/playlist') && !document.getElementById(BUTTON_ID_PLAYLIST)) ||
+    (path.startsWith('/results') && !document.getElementById(BUTTON_ID_SEARCH));
+  if (needsRetry && retriesLeft > 0) {
+    setTimeout(() => tryInjectWithRetry(retriesLeft - 1), 500);
+  }
+}
+
 // YouTube fires this custom event after SPA navigation completes
 document.addEventListener('yt-navigate-finish', () => {
   removeAllButtons();
-  tryInjectButtons();
+  tryInjectWithRetry();
 });
 
 // Also handle yt-page-data-updated (fires when page data is fully loaded)
 document.addEventListener('yt-page-data-updated', () => {
-  tryInjectButtons();
+  tryInjectWithRetry();
 });
 
-// Initial injection for hard page loads
-tryInjectButtons();
+// Initial injection for hard page loads — retry up to 5x (every 500ms)
+tryInjectWithRetry();
 
 // ---------------------------------------------------------------------------
 // Heartbeat — safety net every 2s for cases where observer misses
@@ -610,4 +626,4 @@ const heartbeatId = setInterval(() => {
   if (path.startsWith('/results') && !document.getElementById(BUTTON_ID_SEARCH)) {
     injectSearchButton();
   }
-}, 2000);
+}, 1000);

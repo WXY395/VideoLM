@@ -944,6 +944,43 @@ async function _runAutoSplitImportInner(
 }
 
 // ---------------------------------------------------------------------------
+// Store videoContent for NLM content-script copy button
+// ---------------------------------------------------------------------------
+
+async function storeVideoContentForNlm(videoContent: VideoContent): Promise<void> {
+  const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
+  const nlmTabId = nlmTabs[0]?.id ?? 0;
+  const payload = {
+    [`_videolm_lastVideo_${nlmTabId}`]: {
+      videoContent,
+      storedAt: Date.now(),
+    },
+  };
+  await Promise.all([
+    chrome.storage.session.set(payload),
+    chrome.storage.local.set(payload),
+  ]);
+  console.log('[VideoLM] videoContent stored for NLM tab:', nlmTabId, 'title:', videoContent.title);
+}
+
+/** Build minimal VideoContent from just a URL + title (for QUICK_IMPORT) */
+function buildMinimalVideoContent(videoUrl: string, title: string): VideoContent | null {
+  const m = videoUrl.match(/[?&]v=([\w-]{11})/);
+  if (!m) return null;
+  return {
+    videoId: m[1],
+    title,
+    author: '',
+    platform: 'youtube',
+    transcript: [],
+    duration: 0,
+    language: '',
+    url: videoUrl,
+    metadata: { publishDate: '', viewCount: 0, tags: [] },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Message router
 // ---------------------------------------------------------------------------
 
@@ -1265,7 +1302,11 @@ chrome.runtime.onMessage.addListener(
       }
 
       case 'PROCESS_AND_IMPORT': {
-        processAndImport(message.videoContent, message.options).then((result) => {
+        // Store videoContent immediately (before import, so even dedup-blocked imports get stored)
+        if (message.videoContent) {
+          storeVideoContentForNlm(message.videoContent).catch(() => {});
+        }
+        processAndImport(message.videoContent, message.options).then(async (result) => {
           sendResponse(result);
         });
         return true;
@@ -1287,6 +1328,13 @@ chrome.runtime.onMessage.addListener(
               text: t('toast_importing_video', [videoTitle || '']),
               progress: 50,
             });
+
+            // Store minimal videoContent for NLM copy button (before dedup — even
+            // already-imported videos need videoContent for citation links)
+            const minVC = buildMinimalVideoContent(urls[0], videoTitle || '');
+            if (minVC) {
+              storeVideoContentForNlm(minVC).catch(() => {});
+            }
 
             // Check merge strategy — auto-merge into matching notebook if set
             let targetNbId: string | undefined;
@@ -1824,20 +1872,10 @@ chrome.runtime.onMessage.addListener(
       }
 
       case 'STORE_VIDEO_CONTENT': {
-        // Store the last imported videoContent in session storage, scoped by NLM tabId.
-        // Each NLM tab keeps only the latest entry to prevent memory leak.
         (async () => {
           try {
             const { videoContent } = message as any as { videoContent: VideoContent };
-            // Find the NLM tab to scope the key
-            const nlmTabs = await chrome.tabs.query({ url: 'https://notebooklm.google.com/*' });
-            const nlmTabId = nlmTabs[0]?.id ?? 0;
-            await chrome.storage.session.set({
-              [`_videolm_lastVideo_${nlmTabId}`]: {
-                videoContent,
-                storedAt: Date.now(),
-              },
-            });
+            await storeVideoContentForNlm(videoContent);
             sendResponse({ ok: true });
           } catch (err) {
             sendResponse({ ok: false, error: String(err) });

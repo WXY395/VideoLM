@@ -14,6 +14,9 @@ import {
 } from '../notion-sync';
 import type { TranscriptSegment, VideoContent, VideoCitation } from '@/types';
 
+/** Matches the NOTION_CITATION_HEADER constant in notion-sync.ts */
+const HEADER_PREFIX = '> \u26A0\uFE0F 改寫規則：所有 [n \u{1F4FA}](URL) 為 YouTube 影片來源連結，改寫時必須保留完整 markdown 連結格式，不可移除 URL。';
+
 // ---------------------------------------------------------------------------
 // Test Fixtures
 // ---------------------------------------------------------------------------
@@ -200,8 +203,8 @@ describe('injectCitationLinks', () => {
     ];
     const result = injectCitationLinks('The speaker says [1] here.', citations);
 
-    expect(result).toBe(
-      `The speaker says [[1] \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}&t=90s) here.`,
+    expect(result).toContain(
+      `[1 \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}&t=90s)`,
     );
   });
 
@@ -212,8 +215,8 @@ describe('injectCitationLinks', () => {
     ];
     const result = injectCitationLinks('First [1] then [2].', citations);
 
-    expect(result).toContain(`[[1] \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}&t=45s)`);
-    expect(result).toContain(`[[2] \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}&t=150s)`);
+    expect(result).toContain(`[1 \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}&t=45s)`);
+    expect(result).toContain(`[2 \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}&t=150s)`);
   });
 
   it('confidence=none produces link without &t= parameter', () => {
@@ -222,8 +225,8 @@ describe('injectCitationLinks', () => {
     ];
     const result = injectCitationLinks('Reference [1] here.', citations);
 
-    expect(result).toBe(
-      `Reference [[1] \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}) here.`,
+    expect(result).toContain(
+      `[1 \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID})`,
     );
   });
 
@@ -236,7 +239,7 @@ describe('injectCitationLinks', () => {
 
     // The first [1](url) should be untouched; the standalone [1] should be replaced
     expect(result).toContain('[1](https://example.com)');
-    expect(result).toContain(`[[1] \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}&t=90s)`);
+    expect(result).toContain(`[1 \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}&t=90s)`);
   });
 
   it('unmapped citation numbers become MISSING placeholders', () => {
@@ -245,13 +248,13 @@ describe('injectCitationLinks', () => {
     ];
     const result = injectCitationLinks('Ref [1] and [2] here.', citations);
 
-    expect(result).toContain(`[[1] \u{1F4FA}]`);
+    expect(result).toContain(`[1 \u{1F4FA}]`);
     expect(result).toContain('[[MISSING_CITATION_2]]');
   });
 
-  it('no citations returns text unchanged', () => {
+  it('no citations still prepends header', () => {
     const result = injectCitationLinks('No citations here.', []);
-    expect(result).toBe('No citations here.');
+    expect(result).toBe(`${HEADER_PREFIX}\nNo citations here.`);
   });
 });
 
@@ -402,8 +405,8 @@ describe('notionExport', () => {
 
     // Should have callout at top
     expect(result.markdown).toMatch(/^> \[!INFO\]/);
-    // Should have citation link
-    expect(result.markdown).toContain(`[[1] \u{1F4FA}]`);
+    // Should have citation link with source name
+    expect(result.markdown).toContain(`[1 \u{1F4FA} Sorting Algorithms Explai\u2026]`);
     // Should have checkboxes
     expect(result.markdown).toContain('- [ ] Learn bubble sort');
     expect(result.markdown).toContain('- [ ] Practice merge sort');
@@ -449,11 +452,11 @@ describe('notionExport', () => {
     });
 
     expect(result.markdown).not.toContain('> [!INFO]');
-    expect(result.markdown).toContain(`[[1] \u{1F4FA}]`);
+    expect(result.markdown).toContain(`[1 \u{1F4FA} Sorting Algorithms Explai\u2026]`);
     expect(result.citationsResolved).toBe(1);
   });
 
-  it('all options disabled: returns text unchanged', () => {
+  it('all options disabled: still prepends header when citations present', () => {
     const text = '- Item [1]\n- Item [2]';
     const result = notionExport(text, sampleVideoContent, {
       includeCallout: false,
@@ -462,7 +465,8 @@ describe('notionExport', () => {
       includeSpecScript: false,
     });
 
-    expect(result.markdown).toBe(text);
+    // Header is always added when [n] citation patterns are present
+    expect(result.markdown).toBe(`${HEADER_PREFIX}\n${text}`);
     expect(result.citationsTotal).toBe(0);
     expect(result.citationsResolved).toBe(0);
   });
@@ -528,16 +532,18 @@ describe('Citation-safe transport', () => {
     ]);
     const wrapped = wrapVideoCitationBlock(enc);
     const out = finalizeForNotion(wrapped, map);
-    expect(out).toContain('[[1] \u{1F4FA}](https://youtube.com/watch?v=abc&t=10s)');
-    expect(out).toContain('[[2] \u{1F4FA}](https://youtube.com/watch?v=abc)');
+    expect(out).toContain('[1 \u{1F4FA}](https://youtube.com/watch?v=abc&t=10s)');
+    expect(out).toContain('[2 \u{1F4FA}](https://youtube.com/watch?v=abc)');
     expect(out).not.toContain('VIDEO_CITATION_BLOCK');
+    expect(out).toContain(HEADER_PREFIX);
   });
 
   it('finalize decodes tolerant tag spacing / case', () => {
     const body = 'x <VIDEO_CITATION  id="7" /> y';
     const map = { '7': { url: 'https://youtube.com/watch?v=z' } };
     const out = finalizeForNotion(body, map, { skipOuterFence: true });
-    expect(out).toBe('x [[7] \u{1F4FA}](https://youtube.com/watch?v=z) y');
+    expect(out).toContain(`${HEADER_PREFIX}`);
+    expect(out).toContain('[7 \u{1F4FA}](https://youtube.com/watch?v=z)');
   });
 
   it('convertNumberedParensToCheckboxes: line (n) with n≤20 only', () => {
