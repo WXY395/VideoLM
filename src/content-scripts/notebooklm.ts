@@ -747,6 +747,25 @@ async function handleQuickFix(
     }
   }
 
+  // Fallback: stored videoContent URL (survives extension reload via dual storage)
+  const qfUnresolvedKeys = allCitationSourceNames
+    .filter(csn => !citationMap[String(csn.id)]?.url)
+    .map(csn => String(csn.id));
+  if (qfUnresolvedKeys.length > 0) {
+    const videoContent = await getStoredVideoContent();
+    if (videoContent?.url) {
+      for (const key of qfUnresolvedKeys) {
+        citationMap[key] = {
+          url: videoContent.url,
+          confidence: 'medium',
+          status: 'resolved',
+          sourceName: citationMap[key]?.sourceName,
+        };
+      }
+      console.log(`[VideoLM] videoContent fallback (QF) filled ${qfUnresolvedKeys.length} citation(s)`);
+    }
+  }
+
   // Ensure every citation ID has an entry — unresolved get fallback
   // MUST run after all resolution passes; NEVER overrides existing entries
   for (const csn of allCitationSourceNames) {
@@ -959,6 +978,25 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
         const key = String(hint.id);
         if (!citationMap[key]?.url && hint.href) {
           citationMap[key] = { url: hint.href, confidence: 'low', status: 'resolved' };
+        }
+      }
+
+      // Fallback: stored videoContent URL (survives extension reload via dual storage)
+      const unresolvedKeys = citationSourceNames
+        .filter(csn => !citationMap[String(csn.id)]?.url)
+        .map(csn => String(csn.id));
+      if (unresolvedKeys.length > 0) {
+        const videoContent = await getStoredVideoContent();
+        if (videoContent?.url) {
+          for (const key of unresolvedKeys) {
+            citationMap[key] = {
+              url: videoContent.url,
+              confidence: 'medium',
+              status: 'resolved',
+              sourceName: citationMap[key]?.sourceName,
+            };
+          }
+          console.log(`[VideoLM] videoContent fallback filled ${unresolvedKeys.length} citation(s) with ${videoContent.url}`);
         }
       }
 
