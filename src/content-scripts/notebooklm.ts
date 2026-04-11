@@ -818,6 +818,25 @@ async function handleQuickFix(
       host,
       sourceIndex,
     );
+
+    // Re-register CTA handler with updated lists so toggle preserves progress
+    if (ctaClickAbort) ctaClickAbort.abort();
+    ctaClickAbort = new AbortController();
+    const btn = ctaLabel.parentElement!;
+    btn.addEventListener('click', (e: Event) => {
+      e.stopPropagation();
+      if (isResolving) return;
+      showQuickFixPanel(
+        shadow,
+        nowLowConfidence,
+        nowResolved,
+        (_, sourceName, newUrl) => handleQuickFix(
+          newUrl, sourceName, allCitationSourceNames, protectedText, citationHints, shadow, ctaLabel, host,
+        ),
+        host,
+        sourceIndex,
+      );
+    }, { signal: ctaClickAbort.signal });
   }
 }
 
