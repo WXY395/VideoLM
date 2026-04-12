@@ -207,7 +207,7 @@ describe('injectCitationLinks', () => {
     const result = injectCitationLinks('The speaker says [1] here.', citations);
 
     expect(result).toBe(
-      `${HEADER_PREFIX}\nThe speaker says [[1] \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}&t=90s) here.`,
+      `${HEADER_PREFIX}\nThe speaker says [1 \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}&t=90s) here.`,
     );
   });
 
@@ -218,8 +218,8 @@ describe('injectCitationLinks', () => {
     ];
     const result = injectCitationLinks('First [1] then [2].', citations);
 
-    expect(result).toContain(`[[1] \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}&t=45s)`);
-    expect(result).toContain(`[[2] \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}&t=150s)`);
+    expect(result).toContain(`[1 \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}&t=45s)`);
+    expect(result).toContain(`[2 \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}&t=150s)`);
   });
 
   it('confidence=none produces link without &t= parameter', () => {
@@ -229,7 +229,7 @@ describe('injectCitationLinks', () => {
     const result = injectCitationLinks('Reference [1] here.', citations);
 
     expect(result).toBe(
-      `${HEADER_PREFIX}\nReference [[1] \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}) here.`,
+      `${HEADER_PREFIX}\nReference [1 \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}) here.`,
     );
   });
 
@@ -242,7 +242,7 @@ describe('injectCitationLinks', () => {
 
     // The first [1](url) should be untouched; the standalone [1] should be replaced
     expect(result).toContain('[1](https://example.com)');
-    expect(result).toContain(`[[1] \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}&t=90s)`);
+    expect(result).toContain(`[1 \u{1F4FA}](https://youtube.com/watch?v=${VIDEO_ID}&t=90s)`);
   });
 
   it('unmapped citation numbers become MISSING placeholders', () => {
@@ -251,7 +251,7 @@ describe('injectCitationLinks', () => {
     ];
     const result = injectCitationLinks('Ref [1] and [2] here.', citations);
 
-    expect(result).toContain(`[[1] \u{1F4FA}]`);
+    expect(result).toContain(`[1 \u{1F4FA}]`);
     expect(result).toContain('[[MISSING_2]]');
   });
 
@@ -409,7 +409,7 @@ describe('notionExport', () => {
     // Should have callout at top
     expect(result.markdown).toMatch(/^> \[!INFO\]/);
     // Should have citation link
-    expect(result.markdown).toContain(`[[1] \u{1F4FA}]`);
+    expect(result.markdown).toContain(`[1 \u{1F4FA}]`);
     // Should have checkboxes
     expect(result.markdown).toContain('- [ ] Learn bubble sort');
     expect(result.markdown).toContain('- [ ] Practice merge sort');
@@ -455,7 +455,7 @@ describe('notionExport', () => {
     });
 
     expect(result.markdown).not.toContain('> [!INFO]');
-    expect(result.markdown).toContain(`[[1] \u{1F4FA}]`);
+    expect(result.markdown).toContain(`[1 \u{1F4FA}]`);
     expect(result.citationsResolved).toBe(1);
   });
 
@@ -538,8 +538,8 @@ describe('Citation-safe transport', () => {
     const stripped = stripVideoCitationFence(wrapped);
     expect(stripped).toContain('<VIDEO_CITATION id="1"/>');
     const out = finalizeForNotion(wrapped, map);
-    expect(out).toContain('[[1] \u{1F4FA}](https://youtube.com/watch?v=abc&t=10s)');
-    expect(out).toContain('[[2] \u{1F4FA}](https://youtube.com/watch?v=abc)');
+    expect(out).toContain('[1 \u{1F4FA}](https://youtube.com/watch?v=abc&t=10s)');
+    expect(out).toContain('[2 \u{1F4FA}](https://youtube.com/watch?v=abc)');
     expect(out).not.toContain('VIDEO_CITATION_BLOCK');
   });
 
@@ -567,7 +567,7 @@ describe('Citation-safe transport', () => {
     const body = 'x <VIDEO_CITATION  id="7" /> y';
     const map = { '7': { url: 'https://youtube.com/watch?v=z' } };
     const out = finalizeForNotion(body, map, { skipOuterFence: true });
-    expect(out).toBe(`${HEADER_PREFIX}\nx [[7] \u{1F4FA}](https://youtube.com/watch?v=z) y`);
+    expect(out).toBe(`${HEADER_PREFIX}\nx [7 \u{1F4FA}](https://youtube.com/watch?v=z) y`);
   });
 
   it('convertNumberedParensToCheckboxes: line (n) with n≤20 only', () => {

@@ -27,8 +27,8 @@ const TIMESTAMP_PROXIMITY = 200;
 const FUZZY_WINDOW_SECONDS = 180;
 const MONOTONIC_REVERSE_LIMIT = 600;
 
-/** Resolved citation links: `[[n] 📺](url)` */
-const DECODED_CITATION_LINK_RE = /\[\[(\d+)\]\s*\u{1F4FA}\]\([^)]+\)/gu;
+/** Resolved citation links: `[n 📺](url)` */
+const DECODED_CITATION_LINK_RE = /\[(\d+)\s*\u{1F4FA}\]\([^)]+\)/gu;
 
 /**
  * Citation extraction: `[n]` OR bare `n` (1–3 digits) when delimited by whitespace + punctuation.
@@ -608,7 +608,7 @@ export function finalizeForNotion(
     if (!entry?.url) {
       return `[[MISSING_${idStr}]]`;
     }
-    return `[[${idStr}] \u{1F4FA}](${entry.url})`;
+    return `[${idStr} \u{1F4FA}](${entry.url})`;
   });
 
   const afterCount = countDecodedLinks(out) + countMissingPlaceholders(out);
@@ -656,7 +656,7 @@ export function finalizeForNotionHtml(
     }
     // HTML anchor — Notion will convert this into a clickable link on paste
     const safeUrl = entry.url.replace(/"/g, '&quot;');
-    return `<a href="${safeUrl}" target="_blank">[${idStr}] \u{1F4FA}</a>`;
+    return `<a href="${safeUrl}" target="_blank">${idStr} \u{1F4FA}</a>`;
   });
 
   // Wrap in basic HTML structure with line breaks preserved
