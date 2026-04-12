@@ -5,3 +5,22 @@ dist
 
 # Packaged extension zips (build artifacts; not source of truth)
 /videolm-v*.zip
+*.zip
+
+# Sensitive / internal — never commit
+.competitor-analysis/
+docs/plans/
+docs/ENGINEERING_SNAPSHOT.md
+store/
+backend/
+
+# CWS submission assets (keep final only, no drafts)
+store-assets/public-repo/
+store-assets/*draft*
+
+# Dev tool logs
+.playwright-mcp/
+logo-concepts/
+
+# Claude Code worktrees
+.claude/worktrees/
