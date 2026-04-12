@@ -13,6 +13,7 @@ import { NotebookChoice } from './components/NotebookChoice';
 import { SettingsPage } from './components/SettingsPage';
 import { NotionExportPanel } from './components/NotionExportPanel';
 import { MAX_BATCH_SIZE } from '@/background/batch-queue';
+import { createVideoSourceRecord } from '@/utils/source-resolution';
 import './styles.css';
 
 const FREE_MONTHLY_LIMIT = 100;
@@ -256,6 +257,10 @@ export function App() {
           }
 
           if (response?.success) {
+            // Store source record for citation resolution
+            const sourceRecord = createVideoSourceRecord(content.videoId, content.title, content.author, content.url);
+            safeSendMsg({ type: 'STORE_SOURCE_RECORD', record: sourceRecord }, () => {});
+
             setResult({
               success: true,
               tier: 1,
@@ -297,6 +302,10 @@ export function App() {
         setImporting(false);
 
         if (response?.success) {
+          // Store source record for citation resolution
+          const sourceRecord2 = createVideoSourceRecord(content.videoId, content.title, content.author, content.url);
+          safeSendMsg({ type: 'STORE_SOURCE_RECORD', record: sourceRecord2 }, () => {});
+
           // Copy processed content to clipboard
           if (response.clipboardText) {
             try {

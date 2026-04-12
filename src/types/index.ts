@@ -130,6 +130,38 @@ export interface VideoCitation {
   confidence: 'exact' | 'fuzzy' | 'none';
 }
 
+/** A YouTube source entry captured from NLM batchexecute responses */
+export interface NlmSourceEntry {
+  videoId: string;
+  url: string;
+  channelName: string;
+  capturedAt: number;
+}
+
+/** A stored video source for fingerprint-based citation resolution */
+export interface VideoSourceRecord {
+  sourceId: string;
+  videoId: string;
+  title: string;
+  channel: string;
+  url: string;
+  addedAt: number;
+  normalizedTitle: string;
+  tokens: string[];
+  fingerprint: string;
+  fingerprintVariants: string[];
+  sessions: string[];
+  /** Record origin: manual = user Quick Import, nlm_backfill = cache auto-learning */
+  source?: 'manual' | 'nlm_backfill';
+}
+
+/** Result of resolving a citation source name against the index */
+export interface SourceMatchResult {
+  type: 'matched' | 'uncertain' | 'not_found';
+  record?: VideoSourceRecord;
+  score: number;
+}
+
 /** Options for the Notion export transformation */
 export interface NotionExportOptions {
   /** Prepend > [!INFO] callout block with video metadata */
@@ -145,6 +177,11 @@ export interface NotionExportOptions {
    * `throw` aborts with Error. Default `warn`.
    */
   citationParityMode?: 'warn' | 'throw';
+  /**
+   * `plain`: legacy `[n]` in clipboard text (e.g. popup export).
+   * `protected`: input is already `serializeToProtectedMD` output (NLM Copy button).
+   */
+  citationInputMode?: 'plain' | 'protected';
 }
 
 /** Result of the Notion export transformation */
@@ -189,7 +226,9 @@ export type MessageType =
   | { type: 'RESUME_BATCH' }
   | { type: 'CHECK_PENDING_QUEUE' }
   // Notion Export (v0.3.0)
-  | { type: 'NOTION_EXPORT'; content: string; videoContent: VideoContent; options: NotionExportOptions }
+  | { type: 'NOTION_EXPORT'; content: string; videoContent: VideoContent; options: NotionExportOptions; citationHints?: Array<{ id: number; href?: string }> }
   | { type: 'STORE_VIDEO_CONTENT'; videoContent: VideoContent }
   | { type: 'READ_NLM_RESPONSE' }
-  | { type: 'NLM_RESPONSE'; data: { text: string; citationCount: number } };
+  | { type: 'NLM_RESPONSE'; data: { text: string; citationCount: number } }
+  | { type: 'STORE_SOURCE_RECORD'; record: VideoSourceRecord }
+  | { type: 'GET_SOURCE_INDEX' };

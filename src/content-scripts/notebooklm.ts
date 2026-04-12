@@ -14,7 +14,7 @@
 import { FetchInterceptor, type CapturedRequest } from '@/nlm/fetch-interceptor';
 import { DomAutomation } from '@/nlm/dom-automation';
 import { NLM } from '@/config/selectors';
-import type { DynamicConfig, VideoContent, VideoSourceRecord } from '@/types';
+import type { DynamicConfig, VideoContent, VideoSourceRecord, NlmSourceEntry } from '@/types';
 import {
   collectProtectedCitationMatches,
   wrapVideoCitationTransport,
@@ -25,6 +25,7 @@ import {
 import {
   buildFingerprintIndex,
   resolveCitation,
+  resolveViaCacheBackfill,
   createVideoSourceRecord,
   findSimilarSources,
   type SuggestionResult,
@@ -46,8 +47,130 @@ let activeQuickFixHost: HTMLElement | null = null;
 /** Concurrency guard — prevents double-submit and UI race conditions */
 let isResolving = false;
 
+/** Auto Fill guard — prevents duplicate auto-fill triggers */
+let isAutoFilling = false;
+
 /** AbortController for the CTA click handler — ensures clean listener removal */
 let ctaClickAbort: AbortController | null = null;
+
+// ---------------------------------------------------------------------------
+// NLM Source Cache — Passive YouTube URL extraction from batchexecute responses
+// ---------------------------------------------------------------------------
+
+/** In-memory cache of YouTube sources discovered in NLM batchexecute responses */
+const nlmSourceCache = new Map<string, NlmSourceEntry>();
+
+/** Expose cache for external consumers (copy handler, source resolution) */
+export function getNlmSourceCache(): ReadonlyMap<string, NlmSourceEntry> {
+  return nlmSourceCache;
+}
+
+/**
+ * Process a captured batchexecute response and extract YouTube source data.
+ * NLM response format (Protobuf-like JSON):
+ *   [..., ["https://www.youtube.com/watch?v\u003dVIDEO_ID", "VIDEO_ID", "CHANNEL"], ...]
+ */
+function addToSourceCache(videoId: string, channelName: string): void {
+  if (nlmSourceCache.has(videoId)) return;
+  nlmSourceCache.set(videoId, {
+    videoId,
+    url: `https://www.youtube.com/watch?v=${videoId}`,
+    channelName,
+    capturedAt: Date.now(),
+  });
+  console.log(`[VideoLM] NLM source captured: ${videoId} (${channelName || 'unknown'})`);
+}
+
+function extractChannelNear(text: string, videoId: string, searchStart: number): string {
+  const contextEnd = Math.min(text.length, searchStart + 200);
+  const context = text.slice(Math.max(0, searchStart - 10), contextEnd);
+  const m = context.match(new RegExp(`"${videoId}"\\s*,\\s*"([^"]+)"`, 'i'));
+  return m ? m[1] : '';
+}
+
+function extractNlmSources(rawText: string): void {
+  try {
+    // --- Notebook-scope filter: skip responses not related to current notebook ---
+    const nbMatch = location.pathname.match(/\/notebook\/([a-f0-9-]+)/i);
+    if (nbMatch) {
+      const nbId = nbMatch[1];
+      if (!rawText.includes(nbId)) {
+        const nbIdNoDash = nbId.replace(/-/g, '');
+        if (!rawText.includes(nbIdNoDash)) {
+          return; // Response is not for this notebook — skip
+        }
+      }
+    }
+
+    // Normalize Google wire format encodings before matching
+    const clean = rawText
+      .replace(/\\\\/g, '\\')          // \\\\ → \\ (collapse double-escaping)
+      .replace(/\\\//g, '/')            // \/ → /
+      .replace(/\\u003d/gi, '=')        // \u003d → =
+      .replace(/%3[dD]/g, '=')          // %3D → =
+      .replace(/\\"/g, '"');            // \" → "
+
+    const sizeBefore = nlmSourceCache.size;
+
+    // --- Tier 1: Full YouTube URL patterns ---
+    const urlPatterns: RegExp[] = [
+      /https?:\/\/(?:www\.)?youtube\.com\/watch\?v=([a-zA-Z0-9_-]{11})/gi,
+      /https?:\/\/youtu\.be\/([a-zA-Z0-9_-]{11})/gi,
+      /https?:\/\/(?:www\.)?youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/gi,
+      /https?:\/\/(?:www\.)?youtube\.com\/embed\/([a-zA-Z0-9_-]{11})/gi,
+    ];
+    for (const pattern of urlPatterns) {
+      let match: RegExpExecArray | null;
+      while ((match = pattern.exec(clean)) !== null) {
+        const videoId = match[1];
+        const channelName = extractChannelNear(clean, videoId, match.index + match[0].length);
+        addToSourceCache(videoId, channelName);
+      }
+    }
+
+    // --- Tier 2: Standalone videoId in structured data ---
+    // NLM may store sources as ["VIDEO_ID","TITLE","CHANNEL"] without full URL.
+    // Only search if the response mentions 'youtube' or 'video' (safety guard).
+    if (clean.indexOf('youtube') !== -1 || clean.indexOf('video') !== -1) {
+      // Match quoted 11-char strings that look like YouTube video IDs
+      const idPattern = /"([a-zA-Z0-9_-]{11})"/g;
+      let idMatch: RegExpExecArray | null;
+      while ((idMatch = idPattern.exec(clean)) !== null) {
+        const candidate = idMatch[1];
+        if (nlmSourceCache.has(candidate)) continue;
+
+        // Validate: must contain both letters and digits (pure alpha/digit strings are unlikely IDs)
+        if (!/[a-zA-Z]/.test(candidate) || !/[0-9]/.test(candidate)) continue;
+
+        // Validate: must appear near the candidate's own URL or be paired with a channel name
+        const nearbyStart = Math.max(0, idMatch.index - 300);
+        const nearbyEnd = Math.min(clean.length, idMatch.index + 300);
+        const nearby = clean.slice(nearbyStart, nearbyEnd);
+
+        // Check if a YouTube URL referencing this ID exists nearby
+        const hasNearbyUrl = nearby.includes(`v=${candidate}`) ||
+          nearby.includes(`/${candidate}`) ||
+          nearby.includes(`youtu`);
+
+        if (!hasNearbyUrl) continue;
+
+        // Already captured by Tier 1 URL patterns? Skip.
+        if (nlmSourceCache.has(candidate)) continue;
+
+        const channelName = extractChannelNear(clean, candidate, idMatch.index + idMatch[0].length);
+        addToSourceCache(candidate, channelName);
+      }
+    }
+
+    const added = nlmSourceCache.size - sizeBefore;
+    if (added > 0) {
+      console.log(`[VideoLM] Extraction complete: +${added} sources (total: ${nlmSourceCache.size})`);
+    }
+  } catch (e) {
+    console.warn('[VideoLM] NLM source extraction error:', e);
+  }
+}
+
 
 /**
  * Inject a script string into the page's main world so it can
@@ -61,7 +184,7 @@ function injectScript(code: string): void {
 }
 
 /**
- * Listen for captured fetch requests from the injected page script.
+ * Listen for captured fetch requests and batchexecute responses from injected page scripts.
  */
 window.addEventListener('message', (event: MessageEvent) => {
   if (event.source !== window) return;
@@ -73,6 +196,11 @@ window.addEventListener('message', (event: MessageEvent) => {
       capturedAt: Date.now(),
     });
     console.log('VideoLM: Captured NLM fetch request', payload.url);
+  }
+
+  // Passive: extract YouTube URLs from batchexecute responses
+  if (event.data?.type === '__VIDEOLM_BATCHEXECUTE__') {
+    extractNlmSources(event.data.payload as string);
   }
 });
 
@@ -442,6 +570,16 @@ const NOTION_BTN_STYLES = `
     color: var(--mat-sys-on-surface-variant, #5f6368);
     font-family: monospace;
   }
+  /* ── Auto Fill Hint ── */
+  .vlm-qf-autofill-hint {
+    font-size: 11px;
+    color: #188038;
+    padding: 4px 6px;
+    margin: 4px 0;
+    border-radius: 6px;
+    background: color-mix(in srgb, #188038 8%, transparent);
+    text-align: center;
+  }
 `;
 
 /** Max retry attempts for finding toolbar (NLM toolbar may render late) */
@@ -548,6 +686,31 @@ function showQuickFixPanel(
       const weakCandidates = allCandidates
         .filter(s => s.score >= WEAK_CANDIDATE_THRESHOLD && s.score < STRONG_SUGGESTION_THRESHOLD)
         .slice(0, WEAK_CANDIDATE_LIMIT);
+
+      // ── Auto Fill: HIGH confidence candidate → auto-submit ──
+      const autoFillCandidate = strongCandidates.find(
+        s => s.score >= STRONG_SUGGESTION_THRESHOLD && s.record.url && isYouTubeUrl(s.record.url),
+      );
+      if (autoFillCandidate && !isAutoFilling && !isResolving) {
+        const hintDiv = document.createElement('div');
+        hintDiv.className = 'vlm-qf-autofill-hint';
+        hintDiv.textContent = '\u2714 \u5DF2\u81EA\u52D5\u88DC\u4E0A\u4F86\u6E90\uFF08\u9AD8\u4FE1\u5FC3\uFF09'; // ✔ 已自動補上來源（高信心）
+        div.appendChild(hintDiv);
+
+        isAutoFilling = true;
+        console.log(`[VideoLM] Auto Fill triggered: ${autoFillCandidate.record.videoId} (score: ${autoFillCandidate.score.toFixed(2)})`);
+
+        setTimeout(async () => {
+          try {
+            await onSubmit(item.id, item.sourceName, autoFillCandidate.record.url);
+          } catch (e) {
+            console.warn('[VideoLM] Auto Fill failed:', e);
+            // Fallback: panel stays open for manual input
+          } finally {
+            isAutoFilling = false;
+          }
+        }, 300);
+      }
 
       if (strongCandidates.length > 0) {
         // ── Strong suggestions: actionable with [套用] button ──
@@ -744,6 +907,42 @@ async function handleQuickFix(
     }
   }
 
+  // ── Cache backfill (QF context) — NLM batchexecute source cache ──
+  const qfUnresolvedAfterPrimary = allCitationSourceNames
+    .filter(csn => {
+      const entry = citationMap[String(csn.id)];
+      return !entry?.url || entry.confidence === 'low';
+    });
+
+  if (qfUnresolvedAfterPrimary.length > 0 && nlmSourceCache.size > 0) {
+    const backfill = resolveViaCacheBackfill(
+      qfUnresolvedAfterPrimary, nlmSourceCache, sourceIndex,
+    );
+    for (const [idStr, res] of backfill.resolved) {
+      citationMap[idStr] = {
+        url: res.url,
+        confidence: res.confidence,
+        status: 'resolved',
+        sourceName: citationMap[idStr]?.sourceName,
+      };
+      if (res.confidence === 'high') {
+        const cacheEntry = nlmSourceCache.get(res.videoId);
+        const record = createVideoSourceRecord(
+          res.videoId,
+          citationMap[idStr]?.sourceName ?? '',
+          cacheEntry?.channelName ?? '',
+          res.url,
+        );
+        record.source = 'nlm_backfill';
+        sendMsgAsync({ type: 'STORE_SOURCE_RECORD', record });
+      }
+    }
+    const qfBfTotal = qfUnresolvedAfterPrimary.length;
+    const qfBfResolved = backfill.resolved.size;
+    const qfBfRatio = qfBfTotal > 0 ? Math.round((qfBfResolved / qfBfTotal) * 100) : 0;
+    console.log(`[VideoLM] Backfill stats (QF): ${qfBfResolved}/${qfBfTotal} resolved (${qfBfRatio}%), cache size: ${nlmSourceCache.size}`);
+  }
+
   // Fallback: DOM-extracted hrefs
   for (const hint of citationHints) {
     const key = String(hint.id);
@@ -752,11 +951,12 @@ async function handleQuickFix(
     }
   }
 
-  // Fallback: stored videoContent URL (survives extension reload via dual storage)
+  // Fallback: stored videoContent URL — ONLY for single-source notebooks
   const qfUnresolvedKeys = allCitationSourceNames
     .filter(csn => !citationMap[String(csn.id)]?.url)
     .map(csn => String(csn.id));
-  if (qfUnresolvedKeys.length > 0) {
+  const qfUniqueSourceCount = new Set(allCitationSourceNames.map(csn => csn.sourceName)).size;
+  if (qfUnresolvedKeys.length > 0 && qfUniqueSourceCount <= 1) {
     const videoContent = await getStoredVideoContent();
     if (videoContent?.url) {
       for (const key of qfUnresolvedKeys) {
@@ -769,6 +969,8 @@ async function handleQuickFix(
       }
       console.log(`[VideoLM] videoContent fallback (QF) filled ${qfUnresolvedKeys.length} citation(s)`);
     }
+  } else if (qfUnresolvedKeys.length > 0) {
+    console.log(`[VideoLM] videoContent fallback (QF) SKIPPED: ${qfUniqueSourceCount} unique sources, ${qfUnresolvedKeys.length} unresolved`);
   }
 
   // Ensure every citation ID has an entry — unresolved get fallback
@@ -978,6 +1180,45 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
         console.log(`[VideoLM] Citation ${csn.id}: "${csn.sourceName.slice(0, 30)}" → ${match.type} (${match.score.toFixed(2)})`);
       }
 
+      // ── Cache backfill — NLM batchexecute source cache ──
+      const unresolvedAfterPrimary = citationSourceNames
+        .filter(csn => {
+          const entry = citationMap[String(csn.id)];
+          return !entry?.url || entry.confidence === 'low';
+        });
+
+      if (unresolvedAfterPrimary.length > 0 && nlmSourceCache.size > 0) {
+        const backfill = resolveViaCacheBackfill(
+          unresolvedAfterPrimary, nlmSourceCache, sourceIndex,
+        );
+        for (const [idStr, res] of backfill.resolved) {
+          citationMap[idStr] = {
+            url: res.url,
+            confidence: res.confidence,
+            status: 'resolved',
+            sourceName: citationMap[idStr]?.sourceName,
+          };
+          console.log(`[VideoLM] Cache backfill: citation ${idStr} → ${res.videoId} (${res.confidence})`);
+          // Auto-persist high-confidence results (Data Flywheel)
+          if (res.confidence === 'high') {
+            const cacheEntry = nlmSourceCache.get(res.videoId);
+            const record = createVideoSourceRecord(
+              res.videoId,
+              citationMap[idStr]?.sourceName ?? '',
+              cacheEntry?.channelName ?? '',
+              res.url,
+            );
+            record.source = 'nlm_backfill';
+            sendMsgAsync({ type: 'STORE_SOURCE_RECORD', record });
+          }
+        }
+        // Stats logging
+        const bfTotal = unresolvedAfterPrimary.length;
+        const bfResolved = backfill.resolved.size;
+        const bfRatio = bfTotal > 0 ? Math.round((bfResolved / bfTotal) * 100) : 0;
+        console.log(`[VideoLM] Backfill stats: ${bfResolved}/${bfTotal} resolved (${bfRatio}%), cache size: ${nlmSourceCache.size}`);
+      }
+
       // Fallback: DOM-extracted hrefs (fills remaining gaps)
       for (const hint of citationHints) {
         const key = String(hint.id);
@@ -986,11 +1227,13 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
         }
       }
 
-      // Fallback: stored videoContent URL (survives extension reload via dual storage)
+      // Fallback: stored videoContent URL — ONLY for single-source notebooks
+      // Multi-source notebooks must leave citations unresolved to trigger Quick Fix
       const unresolvedKeys = citationSourceNames
         .filter(csn => !citationMap[String(csn.id)]?.url)
         .map(csn => String(csn.id));
-      if (unresolvedKeys.length > 0) {
+      const uniqueSourceCount = new Set(citationSourceNames.map(csn => csn.sourceName)).size;
+      if (unresolvedKeys.length > 0 && uniqueSourceCount <= 1) {
         const videoContent = await getStoredVideoContent();
         if (videoContent?.url) {
           for (const key of unresolvedKeys) {
@@ -1003,6 +1246,8 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
           }
           console.log(`[VideoLM] videoContent fallback filled ${unresolvedKeys.length} citation(s) with ${videoContent.url}`);
         }
+      } else if (unresolvedKeys.length > 0) {
+        console.log(`[VideoLM] videoContent fallback SKIPPED: ${uniqueSourceCount} unique sources, ${unresolvedKeys.length} unresolved — Quick Fix will handle`);
       }
 
       // Ensure every citation ID has an entry — unresolved get fallback
@@ -1303,5 +1548,8 @@ if ('navigation' in window) {
     setTimeout(() => scanWithRetry(), 1000);
   });
 }
+
+// batchexecute XHR interceptor is installed via nlm-source-interceptor.ts
+// (MAIN world content script, document_start) — no injectScript needed.
 
 console.log('VideoLM: NotebookLM content script loaded');

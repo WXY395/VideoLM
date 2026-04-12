@@ -6,8 +6,9 @@ import {
   buildFingerprintIndex,
   resolveCitation,
   findSimilarSources,
+  resolveViaCacheBackfill,
 } from '../source-resolution';
-import type { VideoSourceRecord } from '@/types';
+import type { VideoSourceRecord, NlmSourceEntry } from '@/types';
 
 function makeRecord(overrides: Partial<VideoSourceRecord> = {}): VideoSourceRecord {
   const title = overrides.title ?? 'Claude Cowork 最友善的手把手教學';
@@ -241,6 +242,224 @@ describe('findSimilarSources', () => {
       const r = makeRecord({ title: 'Python 數據分析入門' });
       const results = findSimilarSources('React Native 手機 App 開發', [r], 3);
       expect(results.length).toBe(0);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveViaCacheBackfill
+// ---------------------------------------------------------------------------
+
+function makeCacheEntry(overrides: Partial<NlmSourceEntry> = {}): NlmSourceEntry {
+  return {
+    videoId: 'dQw4w9WgXcQ',
+    url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    channelName: 'PAPAYA 電腦教室',
+    capturedAt: Date.now(),
+    ...overrides,
+  };
+}
+
+describe('resolveViaCacheBackfill', () => {
+  describe('core matching', () => {
+    it('returns all unresolved when cache is empty', () => {
+      const citations = [{ id: 1, sourceName: 'Some Video' }];
+      const cache = new Map<string, NlmSourceEntry>();
+      const result = resolveViaCacheBackfill(citations, cache, []);
+      expect(result.resolved.size).toBe(0);
+      expect(result.unresolved).toEqual(['1']);
+    });
+
+    it('Tier 1: sourceName contains videoId → exact match (high)', () => {
+      const entry = makeCacheEntry({ videoId: 'abc12345678' });
+      const cache = new Map([['abc12345678', entry]]);
+      const citations = [{ id: 1, sourceName: 'Video abc12345678 title here' }];
+      const result = resolveViaCacheBackfill(citations, cache, []);
+      expect(result.resolved.size).toBe(1);
+      const res = result.resolved.get('1')!;
+      expect(res.videoId).toBe('abc12345678');
+      expect(res.confidence).toBe('high');
+    });
+
+    it('Tier 2: title cross-reference via sourceIndex + channel match → high', () => {
+      const entry = makeCacheEntry({ videoId: 'vid001', channelName: 'PAPAYA 電腦教室' });
+      const cache = new Map([['vid001', entry]]);
+      const record = makeRecord({
+        videoId: 'vid001',
+        title: 'Claude Cowork 最友善的手把手教學',
+        channel: 'PAPAYA 電腦教室',
+        url: 'https://youtube.com/watch?v=vid001',
+      });
+      const citations = [{ id: 1, sourceName: 'Claude Cowork 最友善的手把手教學 - PAPAYA 電腦教室' }];
+      const result = resolveViaCacheBackfill(citations, cache, [record]);
+      expect(result.resolved.size).toBe(1);
+      expect(result.resolved.get('1')!.confidence).toBe('high');
+    });
+
+    it('Tier 2: below threshold → stays unresolved', () => {
+      const entry = makeCacheEntry({ videoId: 'vid001', channelName: 'Unknown Channel' });
+      const cache = new Map([['vid001', entry]]);
+      const record = makeRecord({
+        videoId: 'vid001',
+        title: 'Python 機器學習入門',
+        url: 'https://youtube.com/watch?v=vid001',
+      });
+      const citations = [{ id: 1, sourceName: 'React Native 手機開發指南' }];
+      const result = resolveViaCacheBackfill(citations, cache, [record]);
+      expect(result.resolved.size).toBe(0);
+      expect(result.unresolved).toEqual(['1']);
+    });
+
+    it('Tier 3: elimination — 3 citations + 3 cache, 2 matched → last pair by elimination', () => {
+      const e1 = makeCacheEntry({ videoId: 'v1', channelName: 'Ch1', url: 'https://youtube.com/watch?v=v1' });
+      const e2 = makeCacheEntry({ videoId: 'v2', channelName: 'Ch2', url: 'https://youtube.com/watch?v=v2' });
+      const e3 = makeCacheEntry({ videoId: 'v3', channelName: 'Ch3', url: 'https://youtube.com/watch?v=v3' });
+      const cache = new Map([['v1', e1], ['v2', e2], ['v3', e3]]);
+
+      const r1 = makeRecord({ videoId: 'v1', title: 'First Video Title', url: e1.url });
+      const r2 = makeRecord({ videoId: 'v2', title: 'Second Video Title', url: e2.url });
+      // r3 title is very different from citation 3 source name → Tier 2 won't match
+      const r3 = makeRecord({ videoId: 'v3', title: 'Completely Unrelated Content About Cooking', url: e3.url });
+
+      const citations = [
+        { id: 1, sourceName: 'First Video Title' },      // matches v1 via Tier 2
+        { id: 2, sourceName: 'Second Video Title' },      // matches v2 via Tier 2
+        { id: 3, sourceName: 'Cooking Something XYZ Ch3' }, // no Tier 2 match, but shares "cooking" token → elimination guard passes
+      ];
+      const result = resolveViaCacheBackfill(citations, cache, [r1, r2, r3]);
+      expect(result.resolved.size).toBe(3);
+      expect(result.resolved.get('3')!.videoId).toBe('v3');
+      expect(result.resolved.get('3')!.confidence).toBe('medium');
+    });
+
+    it('multiple cache entries same channel → distinguished by tokens', () => {
+      const e1 = makeCacheEntry({ videoId: 'v1', channelName: 'PAPAYA', url: 'https://youtube.com/watch?v=v1' });
+      const e2 = makeCacheEntry({ videoId: 'v2', channelName: 'PAPAYA', url: 'https://youtube.com/watch?v=v2' });
+      const cache = new Map([['v1', e1], ['v2', e2]]);
+
+      const r1 = makeRecord({ videoId: 'v1', title: 'Claude AI 入門教學', channel: 'PAPAYA', url: e1.url });
+      const r2 = makeRecord({ videoId: 'v2', title: 'Python 資料分析', channel: 'PAPAYA', url: e2.url });
+
+      const citations = [
+        { id: 1, sourceName: 'Claude AI 入門教學 - PAPAYA' },
+        { id: 2, sourceName: 'Python 資料分析 - PAPAYA' },
+      ];
+      const result = resolveViaCacheBackfill(citations, cache, [r1, r2]);
+      expect(result.resolved.size).toBe(2);
+      expect(result.resolved.get('1')!.videoId).toBe('v1');
+      expect(result.resolved.get('2')!.videoId).toBe('v2');
+    });
+
+    it('duplicate citation sourceNames share the same resolution', () => {
+      const entry = makeCacheEntry({ videoId: 'vid001' });
+      const cache = new Map([['vid001', entry]]);
+      const citations = [
+        { id: 1, sourceName: 'Video vid001 title' },
+        { id: 3, sourceName: 'Video vid001 title' },  // same sourceName
+      ];
+      const result = resolveViaCacheBackfill(citations, cache, []);
+      expect(result.resolved.size).toBe(2);
+      expect(result.resolved.get('1')!.videoId).toBe('vid001');
+      expect(result.resolved.get('3')!.videoId).toBe('vid001');
+    });
+  });
+
+  describe('safety mechanisms (Step 5)', () => {
+    it('5a: expired cache entry (>30 min) is excluded', () => {
+      const expired = makeCacheEntry({
+        videoId: 'vid001',
+        capturedAt: Date.now() - 31 * 60 * 1000, // 31 minutes ago
+      });
+      const cache = new Map([['vid001', expired]]);
+      const citations = [{ id: 1, sourceName: 'Video vid001 title' }];
+      const result = resolveViaCacheBackfill(citations, cache, []);
+      expect(result.resolved.size).toBe(0);
+      expect(result.unresolved).toEqual(['1']);
+    });
+
+    it('5a: valid cache entry (29 min) participates normally', () => {
+      const valid = makeCacheEntry({
+        videoId: 'abc12345678',
+        capturedAt: Date.now() - 29 * 60 * 1000, // 29 minutes ago
+      });
+      const cache = new Map([['abc12345678', valid]]);
+      const citations = [{ id: 1, sourceName: 'Video abc12345678' }];
+      const result = resolveViaCacheBackfill(citations, cache, []);
+      expect(result.resolved.size).toBe(1);
+    });
+
+    it('5b: channelName match adds 0.35 bonus, pushing score above threshold', () => {
+      // Entry with channel match + sourceIndex cross-ref
+      // Without channel bonus: token overlap alone may be borderline
+      const entry = makeCacheEntry({ videoId: 'vid001', channelName: 'PAPAYA 電腦教室' });
+      const cache = new Map([['vid001', entry]]);
+
+      // Weak title overlap but channel matches → channel bonus should push above threshold
+      const record = makeRecord({
+        videoId: 'vid001',
+        title: 'Claude AI 完整教學',
+        channel: 'PAPAYA 電腦教室',
+        url: entry.url,
+      });
+      // Source name shares "claude" token + channel name → channel bonus matters
+      const citations = [{ id: 1, sourceName: 'Claude 入門 - PAPAYA 電腦教室' }];
+      const result = resolveViaCacheBackfill(citations, cache, [record]);
+      expect(result.resolved.size).toBe(1);
+      // Score = token * 0.6 + prefix * 0.3 + 0.1 + 0.35 (channel) → should be high
+      expect(result.resolved.get('1')!.confidence).toBe('high');
+    });
+
+    it('5c: elimination guard — zero token overlap + no channel → blocked', () => {
+      const e1 = makeCacheEntry({ videoId: 'v1', channelName: 'Ch1', url: 'https://youtube.com/watch?v=v1' });
+      const e2 = makeCacheEntry({ videoId: 'v2', channelName: 'Ch2', url: 'https://youtube.com/watch?v=v2' });
+      const cache = new Map([['v1', e1], ['v2', e2]]);
+
+      const r1 = makeRecord({ videoId: 'v1', title: 'First Video Title', url: e1.url });
+      const r2 = makeRecord({ videoId: 'v2', title: 'Completely Different Topic', url: e2.url });
+
+      const citations = [
+        { id: 1, sourceName: 'First Video Title' },            // matches v1
+        { id: 2, sourceName: 'Unrelated Zero Overlap XYZ' },   // no token overlap with r2
+      ];
+      const result = resolveViaCacheBackfill(citations, cache, [r1, r2]);
+      expect(result.resolved.get('1')).toBeDefined();
+      // Citation 2 should NOT be matched via elimination due to guard
+      expect(result.unresolved).toContain('2');
+    });
+
+    it('5c: elimination guard — token overlap > 0 → allowed', () => {
+      const e1 = makeCacheEntry({ videoId: 'v1', channelName: 'Ch1', url: 'https://youtube.com/watch?v=v1' });
+      const e2 = makeCacheEntry({ videoId: 'v2', channelName: 'Ch2', url: 'https://youtube.com/watch?v=v2' });
+      const cache = new Map([['v1', e1], ['v2', e2]]);
+
+      const r1 = makeRecord({ videoId: 'v1', title: 'First Video Title', url: e1.url });
+      const r2 = makeRecord({ videoId: 'v2', title: 'Third Video Title Extended', url: e2.url });
+
+      const citations = [
+        { id: 1, sourceName: 'First Video Title' },     // matches v1
+        { id: 2, sourceName: 'Third Video Something' },  // shares 'third' + 'video' with r2
+      ];
+      const result = resolveViaCacheBackfill(citations, cache, [r1, r2]);
+      expect(result.resolved.size).toBe(2);
+      expect(result.resolved.get('2')!.confidence).toBe('medium');
+    });
+
+    it('5c: elimination guard — channel match but zero token → allowed', () => {
+      const e1 = makeCacheEntry({ videoId: 'v1', channelName: 'Ch1', url: 'https://youtube.com/watch?v=v1' });
+      const e2 = makeCacheEntry({ videoId: 'v2', channelName: 'SpecialChannel', url: 'https://youtube.com/watch?v=v2' });
+      const cache = new Map([['v1', e1], ['v2', e2]]);
+
+      const r1 = makeRecord({ videoId: 'v1', title: 'First Video Title', url: e1.url });
+      // No sourceIndex record for v2 → no title tokens available
+      // but channelName matches
+
+      const citations = [
+        { id: 1, sourceName: 'First Video Title' },
+        { id: 2, sourceName: 'specialchannel 的某段影片' },
+      ];
+      const result = resolveViaCacheBackfill(citations, cache, [r1]);
+      expect(result.resolved.size).toBe(2);
+      expect(result.resolved.get('2')!.videoId).toBe('v2');
     });
   });
 });
