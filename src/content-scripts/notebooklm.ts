@@ -266,6 +266,11 @@ const NOTION_BTN_STYLES = `
     border-color: #e37400;
     font-size: 11px;
   }
+  .vlm-notion-btn--hint {
+    color: #1a73e8;
+    border-color: #1a73e8;
+    font-size: 10px;
+  }
   .vlm-notion-btn__icon {
     font-size: 13px;
     line-height: 1;
@@ -1093,13 +1098,18 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
 
         btn.addEventListener('click', ctaClickHandler, { signal: ctaClickAbort.signal });
       } else {
-        // Full success — green checkmark
+        // Full success — green checkmark + Gemini paste hint
         labelSpan.textContent = '\u2714'; // ✔
         btn.classList.add('vlm-notion-btn--success');
         setTimeout(() => {
-          labelSpan.textContent = originalLabel;
+          labelSpan.textContent = 'Gemini \u2192 Ctrl+Shift+V';
           btn.classList.remove('vlm-notion-btn--success');
-        }, 2000);
+          btn.classList.add('vlm-notion-btn--hint');
+          setTimeout(() => {
+            labelSpan.textContent = originalLabel;
+            btn.classList.remove('vlm-notion-btn--hint');
+          }, 3500);
+        }, 1500);
       }
     } catch (err) {
       console.error('[VideoLM] Notion copy failed:', err);

@@ -50,7 +50,7 @@ const VIDEO_CITATION_FENCE_PATTERNS = [
 
 const CITATION_MAP_COMMENT_RE = /\n?<!--\s*CITATION_MAP[\s\S]*?-->\s*$/i;
 
-/** Header instruction embedded in clipboard output to protect citation links during Notion AI processing */
+/** Header instruction embedded in clipboard output to protect citation links during AI rewriting */
 const NOTION_CITATION_HEADER =
   '> \u26A0\uFE0F 改寫規則：所有 [n \u{1F4FA}](URL) 為 YouTube 影片來源連結，改寫時必須保留完整 markdown 連結格式，不可移除 URL。';
 const NOTION_CITATION_HEADER_HTML =
@@ -584,7 +584,7 @@ function countMissingPlaceholders(markdown: string): number {
 }
 
 /**
- * Decode `<VIDEO_CITATION id="n"/>` → `[[n] 📺](url)` with tolerant tag matching.
+ * Decode `<VIDEO_CITATION id="n"/>` → `[n 📺](url)` with tolerant tag matching.
  */
 export function finalizeForNotion(
   text: string,
