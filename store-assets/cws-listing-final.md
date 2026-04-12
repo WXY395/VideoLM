@@ -1,7 +1,5 @@
 # VideoLM — Chrome Web Store Listing (Final)
 
-> Reviewed and approved by product owner. Ready for submission.
-
 ---
 
 ## Extension Name (max 75 chars)
