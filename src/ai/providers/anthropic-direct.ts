@@ -11,6 +11,7 @@ const DEFAULT_MODEL = 'claude-haiku-4-5-20251001';
 const TEMPERATURE = 0.3;
 const MAX_TOKENS = 4096;
 
+// MAX_RETRIES = 3 means 4 total attempts (1 initial + 3 retries)
 const MAX_RETRIES = 3;
 const INITIAL_DELAY_MS = 1000;
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 529]);
@@ -39,39 +40,48 @@ export class AnthropicDirectProvider implements AIProvider {
         await sleep(delay);
       }
 
-      const response = await fetch(ANTHROPIC_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': this.apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({
-          model: this.model,
-          max_tokens: MAX_TOKENS,
-          messages: [{ role: 'user', content: prompt }],
-          temperature: TEMPERATURE,
-        }),
-      });
+      try {
+        const response = await fetch(ANTHROPIC_API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': this.apiKey,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true',
+          },
+          body: JSON.stringify({
+            model: this.model,
+            max_tokens: MAX_TOKENS,
+            messages: [{ role: 'user', content: prompt }],
+            temperature: TEMPERATURE,
+          }),
+        });
 
-      if (response.ok) {
-        const data = await response.json();
-        const textBlock = data.content?.find(
-          (block: { type: string; text?: string }) => block.type === 'text',
-        );
-        return textBlock?.text ?? '';
+        if (response.ok) {
+          const data = await response.json();
+          const textBlock = data.content?.find(
+            (block: { type: string; text?: string }) => block.type === 'text',
+          );
+          return textBlock?.text ?? '';
+        }
+
+        const errorBody = await response.text();
+
+        if (!RETRYABLE_STATUS_CODES.has(response.status)) {
+          throw new Error(`Anthropic API error (${response.status}): ${errorBody}`);
+        }
+
+        lastError = new Error(`Anthropic API error (${response.status}): ${errorBody}`);
+        console.warn(`Anthropic API retryable error (${response.status}): ${errorBody}`);
+      } catch (error) {
+        // Non-retryable API errors: re-throw immediately
+        if (error instanceof Error && error.message.startsWith('Anthropic API error')) {
+          throw error;
+        }
+        // Network error (TypeError) or JSON parse error — retryable
+        lastError = error instanceof Error ? error : new Error(String(error));
+        console.warn(`[VideoLM] Anthropic API network error, will retry...`, lastError.message);
       }
-
-      const errorBody = await response.text();
-
-      if (!RETRYABLE_STATUS_CODES.has(response.status)) {
-        console.error(`Anthropic API error (${response.status}): ${errorBody}`);
-        throw new Error(`Anthropic API error (${response.status}): ${errorBody}`);
-      }
-
-      lastError = new Error(`Anthropic API error (${response.status}): ${errorBody}`);
-      console.warn(`Anthropic API retryable error (${response.status}): ${errorBody}`);
     }
 
     console.error(`Anthropic API failed after ${MAX_RETRIES} retries: ${lastError?.message}`);
