@@ -10,8 +10,8 @@ self.addEventListener('error', (e: ErrorEvent) => {
 import type { MessageType, VideoContent, ImportOptions, ImportMode, NotionExportOptions, VideoSourceRecord } from '@/types';
 import { getConfig } from '@/config/dynamic-config';
 import { resolveProvider } from '@/ai/provider-manager';
-import { formatTranscript, extractVideoId, parseXMLCaptions } from '@/extractors/youtube-extractor';
-import { addMetadataHeader, type MetadataInput } from '@/processing/rag-optimizer';
+import { extractVideoId, parseXMLCaptions } from '@/extractors/youtube-extractor';
+import { processAndImport } from './process-and-import';
 import { checkDuplicateByTitle } from '@/processing/duplicate-detector';
 import { getSettings, saveSettings, incrementUsage, checkQuota } from './usage-tracker';
 import { sanitizeYouTubeUrl, deduplicateUrls } from '@/utils/url-sanitizer';
@@ -69,17 +69,6 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function buildMeta(video: VideoContent): MetadataInput {
-  return {
-    title: video.title,
-    author: video.author,
-    platform: video.platform,
-    publishDate: video.metadata.publishDate,
-    duration: video.duration,
-    url: video.url,
-  };
-}
-
 /**
  * Wait until the YouTube content script is ready in the tab.
  * The content script is auto-injected via manifest.json on YouTube pages,
@@ -114,114 +103,16 @@ async function getSourceListFromNlmTab(): Promise<Array<{ title: string; url?: s
 }
 
 /**
- * Process video content according to import mode and return formatted items.
+ * Default dependencies for processAndImport — wires chrome-backed implementations.
  */
-async function processAndImport(
-  videoContent: VideoContent,
-  options: ImportOptions,
-): Promise<{ success: boolean; items: Array<{ title: string; content: string }>; error?: string; clipboardText?: string; message?: string }> {
-  // 1. Check quota
-  const settings = await getSettings();
-  const quota = checkQuota(settings);
-
-  if (!quota.canImport) {
-    return { success: false, items: [], error: t('error_quota_exceeded') };
-  }
-
-  const needsAI = options.mode !== 'raw';
-  if (needsAI && !quota.canUseAI) {
-    return {
-      success: false,
-      items: [],
-      error: t('error_ai_requires_key'),
-    };
-  }
-
-  // 2. Resolve AI provider
-  const provider = resolveProvider(settings);
-
-  // 3. Format raw transcript
-  const rawText = formatTranscript(videoContent.transcript, { timestamps: true });
-  const meta = buildMeta(videoContent);
-
-  let items: Array<{ title: string; content: string }> = [];
-
-  try {
-    switch (options.mode) {
-      case 'raw': {
-        const content = addMetadataHeader(rawText, meta);
-        items = [{ title: videoContent.title, content }];
-        break;
-      }
-
-      case 'structured':
-      case 'summary': {
-        const processed = await provider.summarize(rawText, videoContent.title, options.mode);
-        if (needsAI) await incrementUsage('aiCalls');
-        const content = addMetadataHeader(processed, meta);
-        items = [{ title: videoContent.title, content }];
-        break;
-      }
-
-      case 'chapters': {
-        // Use YouTube chapters if available, otherwise AI-generated
-        let chapters = videoContent.chapters ?? [];
-
-        if (chapters.length === 0) {
-          chapters = await provider.splitChapters(rawText);
-          if (needsAI) await incrementUsage('aiCalls');
-        }
-
-        if (chapters.length === 0) {
-          // Fallback: treat as single item
-          const content = addMetadataHeader(rawText, meta);
-          items = [{ title: videoContent.title, content }];
-        } else {
-          items = chapters.map((ch) => {
-            const chapterText = ch.segments.length > 0
-              ? formatTranscript(ch.segments, { timestamps: true })
-              : rawText; // fallback if segments are empty
-            const chapterMeta = { ...meta, title: `${videoContent.title} — ${ch.title}` };
-            const content = addMetadataHeader(chapterText, chapterMeta);
-            return { title: ch.title, content };
-          });
-        }
-        break;
-      }
-    }
-
-    // 5. Translate if requested
-    if (options.translate) {
-      for (let i = 0; i < items.length; i++) {
-        items[i].content = await provider.translate(items[i].content, options.translate);
-        await incrementUsage('aiCalls');
-      }
-    }
-
-    // 6. Increment import usage
-    await incrementUsage('imports');
-
-    // 7. Copy to clipboard (Tier 3 — always works)
-    // Combine all items into a single text for clipboard
-    const clipboardText = items
-      .map((item) => item.content)
-      .join('\n\n---\n\n');
-
-    // Use offscreen document to write to clipboard from service worker
-    // (Service workers don't have navigator.clipboard)
-    // For now, send the text back to the popup to handle clipboard
-    return {
-      success: true,
-      items,
-      clipboardText,
-      message: items.length === 1
-        ? `Processed "${items[0].title}". Content copied to clipboard — paste into NotebookLM as a "Copied text" source.`
-        : `Processed ${items.length} items. Content copied to clipboard — paste into NotebookLM as a "Copied text" source.`,
-    };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { success: false, items: [], error: message };
-  }
+function defaultProcessDeps() {
+  return {
+    getSettings,
+    checkQuota,
+    incrementUsage,
+    resolveProvider,
+    t,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1317,7 +1208,7 @@ chrome.runtime.onMessage.addListener(
         if (message.videoContent) {
           storeVideoContentForNlm(message.videoContent).catch(() => {});
         }
-        processAndImport(message.videoContent, message.options).then(async (result) => {
+        processAndImport(message.videoContent, message.options, defaultProcessDeps()).then(async (result) => {
           sendResponse(result);
         });
         return true;

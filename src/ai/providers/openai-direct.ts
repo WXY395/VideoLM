@@ -1,10 +1,13 @@
-import type { AIProvider, Chapter, ImportMode } from '@/types';
+import type { AIProvider, Chapter, ImportMode, TranscriptSegment } from '@/types';
 import {
   buildStructuredPrompt,
   buildSummaryPrompt,
   buildChapterSplitPrompt,
   buildTranslatePrompt,
 } from '../prompts';
+import { fetchWithRetry } from '../fetch-with-retry';
+import { stripCodeFence } from '../strip-code-fence';
+import { normalizeChapters, type RawChapter } from '../normalize-chapters';
 
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 const DEFAULT_MODEL = 'gpt-4o-mini';
@@ -21,61 +24,64 @@ export class OpenAIDirectProvider implements AIProvider {
   }
 
   private async chat(prompt: string): Promise<string> {
-    const response = await fetch(OPENAI_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
+    const response = await fetchWithRetry(
+      OPENAI_API_URL,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: TEMPERATURE,
+        }),
       },
-      body: JSON.stringify({
-        model: this.model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: TEMPERATURE,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      console.error(`OpenAI API error (${response.status}): ${error}`);
-      return '';
-    }
+      { providerName: 'OpenAI' },
+    );
 
     const data = await response.json();
-    return data.choices[0]?.message?.content ?? '';
+    return stripCodeFence(data.choices[0]?.message?.content ?? '');
   }
 
   async summarize(transcript: string, videoTitle: string, mode: ImportMode): Promise<string> {
-    if (mode === 'raw') {
-      return transcript;
+    if (mode === 'raw') return transcript;
+    try {
+      if (mode === 'summary') {
+        const prompt = buildSummaryPrompt(transcript, videoTitle, '', 'en');
+        return await this.chat(prompt);
+      }
+      const prompt = buildStructuredPrompt(transcript, videoTitle, '', 0, 'en');
+      return await this.chat(prompt);
+    } catch (error) {
+      console.error('OpenAI summarize failed:', error);
+      return '';
     }
-
-    if (mode === 'summary') {
-      const prompt = buildSummaryPrompt(transcript, videoTitle, '', 'en');
-      return this.chat(prompt);
-    }
-
-    // Default: structured
-    const prompt = buildStructuredPrompt(transcript, videoTitle, '', 0, 'en');
-    return this.chat(prompt);
   }
 
-  async splitChapters(transcript: string): Promise<Chapter[]> {
-    const prompt = buildChapterSplitPrompt(transcript);
-    const result = await this.chat(prompt);
-
-    const parsed = JSON.parse(result);
-    return parsed.map(
-      (ch: { chapterTitle: string; startTime: number; endTime: number; content: string }) => ({
-        title: ch.chapterTitle,
-        startTime: ch.startTime,
-        endTime: ch.endTime,
-        segments: [],
-      }),
-    );
+  async splitChapters(
+    transcript: string,
+    segments: TranscriptSegment[],
+  ): Promise<Chapter[]> {
+    try {
+      const prompt = buildChapterSplitPrompt(transcript);
+      const result = await this.chat(prompt);
+      const parsed: RawChapter[] = JSON.parse(result);
+      return normalizeChapters(parsed, segments);
+    } catch (error) {
+      console.error('OpenAI splitChapters failed:', error);
+      return [];
+    }
   }
 
   async translate(content: string, targetLang: string): Promise<string> {
-    const prompt = buildTranslatePrompt(content, targetLang);
-    return this.chat(prompt);
+    try {
+      const prompt = buildTranslatePrompt(content, targetLang);
+      return await this.chat(prompt);
+    } catch (error) {
+      console.error('OpenAI translate failed:', error);
+      return '';
+    }
   }
 }
