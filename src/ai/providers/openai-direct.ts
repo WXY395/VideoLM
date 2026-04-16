@@ -6,6 +6,7 @@ import {
   buildTranslatePrompt,
 } from '../prompts';
 import { fetchWithRetry } from '../fetch-with-retry';
+import { stripCodeFence } from '../strip-code-fence';
 
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 const DEFAULT_MODEL = 'gpt-4o-mini';
@@ -40,7 +41,7 @@ export class OpenAIDirectProvider implements AIProvider {
     );
 
     const data = await response.json();
-    return data.choices[0]?.message?.content ?? '';
+    return stripCodeFence(data.choices[0]?.message?.content ?? '');
   }
 
   async summarize(transcript: string, videoTitle: string, mode: ImportMode): Promise<string> {

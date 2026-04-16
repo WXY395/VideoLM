@@ -6,6 +6,7 @@ import {
   buildTranslatePrompt,
 } from '../prompts';
 import { fetchWithRetry } from '../fetch-with-retry';
+import { stripCodeFence } from '../strip-code-fence';
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const DEFAULT_MODEL = 'claude-haiku-4-5-20251001';
@@ -47,7 +48,7 @@ export class AnthropicDirectProvider implements AIProvider {
     const textBlock = data.content?.find(
       (block: { type: string; text?: string }) => block.type === 'text',
     );
-    return textBlock?.text ?? '';
+    return stripCodeFence(textBlock?.text ?? '');
   }
 
   async summarize(transcript: string, videoTitle: string, mode: ImportMode): Promise<string> {
