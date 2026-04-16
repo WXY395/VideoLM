@@ -1,4 +1,5 @@
 import type { AIProvider, Chapter, ImportMode, TranscriptSegment } from '@/types';
+import { normalizeChapters, type RawChapter } from '../normalize-chapters';
 
 const DEFAULT_BACKEND_URL = 'https://api.videolm.workers.dev';
 
@@ -47,15 +48,26 @@ export class BuiltinProvider implements AIProvider {
     const result = await this.post<{ chapters: Chapter[] }>('/api/split-chapters', {
       transcript,
     });
-    // Backfill segments from the caller-supplied transcript if the backend
-    // returned chapters without segment data (same defence as BYOK providers).
-    return (result.chapters ?? []).map((ch) => ({
-      ...ch,
-      segments:
-        ch.segments && ch.segments.length > 0
-          ? ch.segments
-          : segments.filter((s) => s.start >= ch.startTime && s.start < ch.endTime),
+
+    const backendChapters = result.chapters ?? [];
+
+    // If the backend returned no chapters at all, just pass the empty list through.
+    if (backendChapters.length === 0) return [];
+
+    // If every chapter already carries segments, trust the backend.
+    const allHaveSegments = backendChapters.every(
+      (ch) => ch.segments && ch.segments.length > 0,
+    );
+    if (allHaveSegments) return backendChapters;
+
+    // Otherwise run the same defensive normalisation as BYOK providers so we
+    // never emit overlapping chapters that would duplicate transcript content.
+    const raw: RawChapter[] = backendChapters.map((ch) => ({
+      chapterTitle: ch.title,
+      startTime: ch.startTime,
+      endTime: ch.endTime,
     }));
+    return normalizeChapters(raw, segments);
   }
 
   async translate(content: string, targetLang: string): Promise<string> {

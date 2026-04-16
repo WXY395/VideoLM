@@ -7,6 +7,7 @@ import {
 } from '../prompts';
 import { fetchWithRetry } from '../fetch-with-retry';
 import { stripCodeFence } from '../strip-code-fence';
+import { normalizeChapters, type RawChapter } from '../normalize-chapters';
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const DEFAULT_MODEL = 'claude-haiku-4-5-20251001';
@@ -73,17 +74,8 @@ export class AnthropicDirectProvider implements AIProvider {
     try {
       const prompt = buildChapterSplitPrompt(transcript);
       const result = await this.chat(prompt);
-      const parsed = JSON.parse(result);
-      return parsed.map(
-        (ch: { chapterTitle: string; startTime: number; endTime: number; content: string }) => ({
-          title: ch.chapterTitle,
-          startTime: ch.startTime,
-          endTime: ch.endTime,
-          segments: segments.filter(
-            (s) => s.start >= ch.startTime && s.start < ch.endTime,
-          ),
-        }),
-      );
+      const parsed: RawChapter[] = JSON.parse(result);
+      return normalizeChapters(parsed, segments);
     } catch (error) {
       console.error('Anthropic splitChapters failed:', error);
       return [];
