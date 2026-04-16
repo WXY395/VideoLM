@@ -1,5 +1,8 @@
 # VideoLM — Chrome Web Store Listing (Final)
 
+> **Current version on CWS:** v0.3.0 (submitted 2026-04-17)
+> **Note:** Contact email on the live CWS listing may differ from the `support@videolm.dev` shown in this file. See the CWS Developer Dashboard for the current value.
+
 ---
 
 ## Extension Name (max 75 chars)
@@ -36,6 +39,26 @@ Transform your YouTube research workflow. VideoLM turns hours of manual link col
 Stop copy-pasting URLs one by one. VideoLM adds a native NotebookLM button directly on YouTube pages — click it to import the current video, an entire channel, or a full playlist into your notebook instantly.
 
 Whether you're a researcher building a knowledge base, a student preparing for exams, or a podcaster curating source material, VideoLM bridges the gap between YouTube and NotebookLM's powerful AI analysis.
+
+
+========================================
+WHAT'S NEW IN v0.3.0 (Apr 2026)
+========================================
+
+RELIABILITY
+• Automatic retry with exponential backoff for transient API errors (500, 502, 503, 504, 529, network failures, 429 rate limits)
+• Honors Retry-After header on rate-limit responses
+• Client errors (401, 400, 403) fail fast to avoid wasting quota
+
+AI STRUCTURED MODE FIX
+• Fixed content being stripped when GPT-4o-mini auto-wraps output in markdown code fences
+
+AI CHAPTERS MODE FIX
+• Fixed chapter duplication — each chapter now contains only its own time range segments
+• Added defensive deduplication when AI returns overlapping chapter time ranges
+
+TESTING
+• Test coverage expanded from 277 to 346 tests across all AI modes
 
 
 KEY FEATURES
@@ -124,6 +147,26 @@ Contact: support@videolm.dev
 VideoLM：您的 YouTube 轉 NotebookLM 智慧橋樑
 
 別再浪費時間一個一個複製貼上網址了！VideoLM 專為 AI 研究者、學生與內容創作者設計，讓您在 YouTube 頁面直接「一鍵匯入」所有內容到 Google NotebookLM。
+
+
+========================================
+v0.3.0 更新內容（2026 年 4 月）
+========================================
+
+【更穩定】
+• 新增自動重試機制：API 遇到暫時性錯誤（500、502、503、504、529、網路斷線、429 限流）會自動重試
+• 支援 Retry-After 標頭：429 限流時依 API 建議時間等待
+• 客戶端錯誤（401、400、403）不重試，立即報錯避免浪費配額
+
+【AI 結構化修復】
+• 修復 GPT-4o-mini 自動加程式碼圍欄導致 Notion 匯出內容消失的問題
+
+【AI 章節拆分修復】
+• 修復章節內容重複問題：原本每個章節都含完整逐字稿，現在精準切分對應時段
+• 加入防禦性去重：AI 給出重疊時間範圍時自動合併
+
+【測試】
+• 測試覆蓋率大幅提升（277 → 346 項）
 
 
 核心優勢
