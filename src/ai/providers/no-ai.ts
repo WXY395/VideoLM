@@ -1,4 +1,4 @@
-import type { AIProvider, Chapter, ImportMode } from '@/types';
+import type { AIProvider, Chapter, ImportMode, TranscriptSegment } from '@/types';
 
 /**
  * Fallback provider when no AI backend is available.
@@ -12,7 +12,10 @@ export class NoAIProvider implements AIProvider {
     return transcript;
   }
 
-  async splitChapters(_transcript: string): Promise<Chapter[]> {
+  async splitChapters(
+    _transcript: string,
+    _segments: TranscriptSegment[],
+  ): Promise<Chapter[]> {
     return [];
   }
 

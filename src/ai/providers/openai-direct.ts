@@ -1,4 +1,4 @@
-import type { AIProvider, Chapter, ImportMode } from '@/types';
+import type { AIProvider, Chapter, ImportMode, TranscriptSegment } from '@/types';
 import {
   buildStructuredPrompt,
   buildSummaryPrompt,
@@ -58,7 +58,10 @@ export class OpenAIDirectProvider implements AIProvider {
     }
   }
 
-  async splitChapters(transcript: string): Promise<Chapter[]> {
+  async splitChapters(
+    transcript: string,
+    segments: TranscriptSegment[],
+  ): Promise<Chapter[]> {
     try {
       const prompt = buildChapterSplitPrompt(transcript);
       const result = await this.chat(prompt);
@@ -68,7 +71,9 @@ export class OpenAIDirectProvider implements AIProvider {
           title: ch.chapterTitle,
           startTime: ch.startTime,
           endTime: ch.endTime,
-          segments: [],
+          segments: segments.filter(
+            (s) => s.start >= ch.startTime && s.start < ch.endTime,
+          ),
         }),
       );
     } catch (error) {

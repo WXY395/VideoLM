@@ -1,10 +1,10 @@
-import type { Chapter, ImportMode } from '@/types';
+import type { Chapter, ImportMode, TranscriptSegment } from '@/types';
 
 /** AI provider interface for content processing */
 export interface AIProvider {
   name: string;
   summarize(transcript: string, videoTitle: string, mode: ImportMode): Promise<string>;
-  splitChapters(transcript: string): Promise<Chapter[]>;
+  splitChapters(transcript: string, segments: TranscriptSegment[]): Promise<Chapter[]>;
   translate(content: string, targetLang: string): Promise<string>;
 }
 

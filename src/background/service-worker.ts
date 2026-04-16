@@ -168,7 +168,7 @@ async function processAndImport(
         let chapters = videoContent.chapters ?? [];
 
         if (chapters.length === 0) {
-          chapters = await provider.splitChapters(rawText);
+          chapters = await provider.splitChapters(rawText, videoContent.transcript);
           if (needsAI) await incrementUsage('aiCalls');
         }
 

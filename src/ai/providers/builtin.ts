@@ -1,4 +1,4 @@
-import type { AIProvider, Chapter, ImportMode } from '@/types';
+import type { AIProvider, Chapter, ImportMode, TranscriptSegment } from '@/types';
 
 const DEFAULT_BACKEND_URL = 'https://api.videolm.workers.dev';
 
@@ -40,11 +40,22 @@ export class BuiltinProvider implements AIProvider {
     return result.content;
   }
 
-  async splitChapters(transcript: string): Promise<Chapter[]> {
+  async splitChapters(
+    transcript: string,
+    segments: TranscriptSegment[],
+  ): Promise<Chapter[]> {
     const result = await this.post<{ chapters: Chapter[] }>('/api/split-chapters', {
       transcript,
     });
-    return result.chapters;
+    // Backfill segments from the caller-supplied transcript if the backend
+    // returned chapters without segment data (same defence as BYOK providers).
+    return (result.chapters ?? []).map((ch) => ({
+      ...ch,
+      segments:
+        ch.segments && ch.segments.length > 0
+          ? ch.segments
+          : segments.filter((s) => s.start >= ch.startTime && s.start < ch.endTime),
+    }));
   }
 
   async translate(content: string, targetLang: string): Promise<string> {
