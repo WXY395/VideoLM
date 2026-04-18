@@ -32,11 +32,12 @@ export class BuiltinProvider implements AIProvider {
     return response.json() as Promise<T>;
   }
 
-  async summarize(transcript: string, videoTitle: string, mode: ImportMode): Promise<string> {
+  async summarize(transcript: string, videoTitle: string, mode: ImportMode, language: string): Promise<string> {
     const result = await this.post<{ content: string }>('/api/summarize', {
       transcript,
       videoTitle,
       mode,
+      language,
     });
     return result.content;
   }

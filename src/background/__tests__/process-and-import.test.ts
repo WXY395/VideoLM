@@ -31,7 +31,7 @@ const SAMPLE_VIDEO: VideoContent = {
 function makeMockProvider(overrides: Partial<AIProvider> = {}): AIProvider {
   return {
     name: 'mock',
-    summarize: vi.fn(async (t: string) => `SUMMARY: ${t.substring(0, 20)}...`),
+    summarize: vi.fn(async (t: string, _videoTitle: string, _mode: string, _language: string) => `SUMMARY: ${t.substring(0, 20)}...`),
     splitChapters: vi.fn(async (_transcript: string, segments: TranscriptSegment[]) => [
       {
         title: 'Chapter One',
@@ -143,7 +143,7 @@ describe('processAndImport', () => {
       await processAndImport(SAMPLE_VIDEO, { mode: 'summary' }, deps);
 
       expect(provider.summarize).toHaveBeenCalledTimes(1);
-      expect(provider.summarize).toHaveBeenCalledWith(expect.any(String), 'Sample Video', 'summary');
+      expect(provider.summarize).toHaveBeenCalledWith(expect.any(String), 'Sample Video', 'summary', expect.any(String));
     });
 
     it('increments aiCalls', async () => {
@@ -167,7 +167,7 @@ describe('processAndImport', () => {
       expect(result.success).toBe(true);
       expect(result.items).toHaveLength(1);
       expect(provider.summarize).toHaveBeenCalledTimes(1);
-      expect(provider.summarize).toHaveBeenCalledWith(expect.any(String), 'Sample Video', 'structured');
+      expect(provider.summarize).toHaveBeenCalledWith(expect.any(String), 'Sample Video', 'structured', expect.any(String));
       expect(deps.incrementUsage).toHaveBeenCalledWith('aiCalls');
     });
   });

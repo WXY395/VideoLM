@@ -40,7 +40,7 @@ describe('OpenAIDirectProvider', () => {
   it('returns parsed response on success', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(makeOkResponse('summary text') as Response);
 
-    const result = await provider.summarize('transcript', 'title', 'summary');
+    const result = await provider.summarize('transcript', 'title', 'summary', 'English');
 
     expect(result).toBe('summary text');
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -51,7 +51,7 @@ describe('OpenAIDirectProvider', () => {
       makeErrorResponse(401, 'Unauthorized') as unknown as Response,
     );
 
-    const result = await provider.summarize('transcript', 'title', 'summary');
+    const result = await provider.summarize('transcript', 'title', 'summary', 'English');
 
     // summarize catches the NonRetryableApiError and returns ''
     expect(result).toBe('');
@@ -59,7 +59,7 @@ describe('OpenAIDirectProvider', () => {
   });
 
   it('returns raw transcript for raw mode without API call', async () => {
-    const result = await provider.summarize('raw transcript text', 'title', 'raw');
+    const result = await provider.summarize('raw transcript text', 'title', 'raw', 'English');
 
     expect(result).toBe('raw transcript text');
     expect(fetch).not.toHaveBeenCalled();

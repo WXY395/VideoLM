@@ -82,7 +82,7 @@ export interface DynamicConfig {
 /** AI provider interface — see src/ai/types.ts for full definition */
 export interface AIProvider {
   name: string;
-  summarize(transcript: string, videoTitle: string, mode: ImportMode): Promise<string>;
+  summarize(transcript: string, videoTitle: string, mode: ImportMode, language: string): Promise<string>;
   splitChapters(transcript: string, segments: TranscriptSegment[]): Promise<Chapter[]>;
   translate(content: string, targetLang: string): Promise<string>;
 }

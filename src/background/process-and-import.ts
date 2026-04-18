@@ -81,7 +81,7 @@ export async function processAndImport(
 
       case 'structured':
       case 'summary': {
-        const processed = await provider.summarize(rawText, videoContent.title, options.mode);
+        const processed = await provider.summarize(rawText, videoContent.title, options.mode, 'en');
         if (needsAI) await deps.incrementUsage('aiCalls');
         const content = addMetadataHeader(processed, meta);
         items = [{ title: videoContent.title, content }];
