@@ -337,6 +337,46 @@ describe('processAndImport', () => {
     });
   });
 
+  describe('output language propagation', () => {
+    it('passes resolved language to provider.summarize based on video language', async () => {
+      const provider = makeMockProvider();
+      const deps = makeDefaultDeps(provider);
+      const cantoneseVideo: VideoContent = { ...SAMPLE_VIDEO, language: 'yue' };
+
+      await processAndImport(cantoneseVideo, { mode: 'summary' }, deps);
+
+      expect(provider.summarize).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        'summary',
+        'Cantonese',
+      );
+    });
+
+    it('honors user outputLanguage override over video language', async () => {
+      const provider = makeMockProvider();
+      const baseDeps = makeDefaultDeps(provider);
+      const baseSettings = await baseDeps.getSettings();
+      const overrideDeps: ProcessDeps = {
+        ...baseDeps,
+        getSettings: async () => ({
+          ...baseSettings,
+          outputLanguage: 'zh-TW',
+        }),
+      };
+      const cantoneseVideo: VideoContent = { ...SAMPLE_VIDEO, language: 'yue' };
+
+      await processAndImport(cantoneseVideo, { mode: 'summary' }, overrideDeps);
+
+      expect(provider.summarize).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        'summary',
+        'Traditional Chinese',
+      );
+    });
+  });
+
   describe('clipboardText assembly', () => {
     it('for 1 item: clipboardText equals item content', async () => {
       const provider = makeMockProvider();
