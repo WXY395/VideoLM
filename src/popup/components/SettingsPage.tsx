@@ -22,6 +22,9 @@ export function SettingsPage({ settings, onSave, onBack }: SettingsPageProps) {
   const [dupStrategy, setDupStrategy] = useState<DuplicateStrategy>(
     settings.duplicateStrategy ?? 'ask'
   );
+  const [outputLanguage, setOutputLanguage] = useState<string>(
+    settings.outputLanguage ?? 'auto'
+  );
   const [saved, setSaved] = useState(false);
 
   const handleSave = () => {
@@ -33,7 +36,7 @@ export function SettingsPage({ settings, onSave, onBack }: SettingsPageProps) {
         }
       : undefined;
 
-    onSave({ byok, duplicateStrategy: dupStrategy });
+    onSave({ byok, duplicateStrategy: dupStrategy, outputLanguage });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -118,6 +121,28 @@ export function SettingsPage({ settings, onSave, onBack }: SettingsPageProps) {
             {settings.tier !== 'pro' && <span className="settings-pro-badge">{t('common_pro_badge')}</span>}
           </label>
         </div>
+      </div>
+
+      <div className="settings-section">
+        <label className="settings-label" htmlFor="output-language-select">
+          {t('settings_output_language')}
+        </label>
+        <select
+          id="output-language-select"
+          value={outputLanguage}
+          onChange={(e) => setOutputLanguage(e.target.value)}
+        >
+          <option value="auto">{t('settings_output_language_auto')}</option>
+          <option value="en">English</option>
+          <option value="zh-TW">繁體中文 (Traditional Chinese)</option>
+          <option value="zh-CN">简体中文 (Simplified Chinese)</option>
+          <option value="ja">日本語 (Japanese)</option>
+          <option value="ko">한국어 (Korean)</option>
+          <option value="es">Español (Spanish)</option>
+          <option value="fr">Français (French)</option>
+          <option value="de">Deutsch (German)</option>
+        </select>
+        <p className="settings-help">{t('settings_output_language_help')}</p>
       </div>
 
       <p className="settings-hint">
