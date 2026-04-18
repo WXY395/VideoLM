@@ -106,6 +106,8 @@ export interface UserSettings {
   byok?: BYOKConfig;
   defaultMode: ImportMode;
   defaultTranslateLang?: string;
+  /** AI output language. 'auto' = match video's caption language. Any other value = ISO code like 'en', 'zh-TW', 'ja'. Default: 'auto'. */
+  outputLanguage?: 'auto' | string;
   duplicateStrategy: DuplicateStrategy;
   monthlyUsage: {
     imports: number;
