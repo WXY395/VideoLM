@@ -35,6 +35,8 @@ export function buildStructuredPrompt(
 
 Produce a structured Markdown document from the video transcript below. Follow these rules precisely:
 
+**Write the entire document (including all headings, bullet points, and glossary entries) in ${language}.** Do not mix languages. The source-language metadata line below is just a label; your output language must be ${language}.
+
 ### Document structure
 
 1. **Metadata block** (at the top):
@@ -116,8 +118,10 @@ ${transcript}`;
  * The chapter sizes target the 300-2000 word RAG sweet spot.
  * Includes different splitting strategies based on video type.
  */
-export function buildChapterSplitPrompt(transcript: string): string {
+export function buildChapterSplitPrompt(transcript: string, language: string): string {
   return `You are a content structuring engine. Split the following video transcript into logical chapters.
+
+**Write every chapter title, summary, and \`content\` field in ${language}.** Do not mix languages. Timestamps, numbers, and JSON keys must remain unchanged, but every human-readable string you produce must be in ${language}.
 
 ### Output format
 

@@ -45,9 +45,11 @@ export class BuiltinProvider implements AIProvider {
   async splitChapters(
     transcript: string,
     segments: TranscriptSegment[],
+    language: string,
   ): Promise<Chapter[]> {
     const result = await this.post<{ chapters: Chapter[] }>('/api/split-chapters', {
       transcript,
+      language,
     });
 
     const backendChapters = result.chapters ?? [];

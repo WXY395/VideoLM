@@ -15,6 +15,7 @@ export class NoAIProvider implements AIProvider {
   async splitChapters(
     _transcript: string,
     _segments: TranscriptSegment[],
+    _language: string,
   ): Promise<Chapter[]> {
     return [];
   }

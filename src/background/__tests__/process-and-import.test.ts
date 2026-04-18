@@ -32,7 +32,7 @@ function makeMockProvider(overrides: Partial<AIProvider> = {}): AIProvider {
   return {
     name: 'mock',
     summarize: vi.fn(async (t: string, _videoTitle: string, _mode: string, _language: string) => `SUMMARY: ${t.substring(0, 20)}...`),
-    splitChapters: vi.fn(async (_transcript: string, segments: TranscriptSegment[]) => [
+    splitChapters: vi.fn(async (_transcript: string, segments: TranscriptSegment[], _language: string) => [
       {
         title: 'Chapter One',
         startTime: 0,

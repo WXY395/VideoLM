@@ -45,7 +45,7 @@ describe('splitChapters — segment slicing', () => {
       { start: 90, duration: 10, text: 'end' },
     ];
 
-    const chapters = await provider.splitChapters('full-transcript-text', segments);
+    const chapters = await provider.splitChapters('full-transcript-text', segments, 'en');
 
     expect(chapters).toHaveLength(2);
 
@@ -79,7 +79,7 @@ describe('splitChapters — segment slicing', () => {
       { start: 90, duration: 10, text: 'b1' },
     ];
 
-    const chapters = await provider.splitChapters('full-transcript', segments);
+    const chapters = await provider.splitChapters('full-transcript', segments, 'en');
 
     const totalPlaced = chapters.reduce((n, ch) => n + ch.segments.length, 0);
     expect(totalPlaced).toBe(segments.length);

@@ -63,9 +63,10 @@ export class OpenAIDirectProvider implements AIProvider {
   async splitChapters(
     transcript: string,
     segments: TranscriptSegment[],
+    language: string,
   ): Promise<Chapter[]> {
     try {
-      const prompt = buildChapterSplitPrompt(transcript);
+      const prompt = buildChapterSplitPrompt(transcript, language);
       const result = await this.chat(prompt);
       const parsed: RawChapter[] = JSON.parse(result);
       return normalizeChapters(parsed, segments);
