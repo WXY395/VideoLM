@@ -32,11 +32,12 @@ export class BuiltinProvider implements AIProvider {
     return response.json() as Promise<T>;
   }
 
-  async summarize(transcript: string, videoTitle: string, mode: ImportMode): Promise<string> {
+  async summarize(transcript: string, videoTitle: string, mode: ImportMode, language: string): Promise<string> {
     const result = await this.post<{ content: string }>('/api/summarize', {
       transcript,
       videoTitle,
       mode,
+      language,
     });
     return result.content;
   }
@@ -44,9 +45,11 @@ export class BuiltinProvider implements AIProvider {
   async splitChapters(
     transcript: string,
     segments: TranscriptSegment[],
+    language: string,
   ): Promise<Chapter[]> {
     const result = await this.post<{ chapters: Chapter[] }>('/api/split-chapters', {
       transcript,
+      language,
     });
 
     const backendChapters = result.chapters ?? [];

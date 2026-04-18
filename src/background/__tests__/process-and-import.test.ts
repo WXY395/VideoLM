@@ -31,8 +31,8 @@ const SAMPLE_VIDEO: VideoContent = {
 function makeMockProvider(overrides: Partial<AIProvider> = {}): AIProvider {
   return {
     name: 'mock',
-    summarize: vi.fn(async (t: string) => `SUMMARY: ${t.substring(0, 20)}...`),
-    splitChapters: vi.fn(async (_transcript: string, segments: TranscriptSegment[]) => [
+    summarize: vi.fn(async (t: string, _videoTitle: string, _mode: string, _language: string) => `SUMMARY: ${t.substring(0, 20)}...`),
+    splitChapters: vi.fn(async (_transcript: string, segments: TranscriptSegment[], _language: string) => [
       {
         title: 'Chapter One',
         startTime: 0,
@@ -143,7 +143,7 @@ describe('processAndImport', () => {
       await processAndImport(SAMPLE_VIDEO, { mode: 'summary' }, deps);
 
       expect(provider.summarize).toHaveBeenCalledTimes(1);
-      expect(provider.summarize).toHaveBeenCalledWith(expect.any(String), 'Sample Video', 'summary');
+      expect(provider.summarize).toHaveBeenCalledWith(expect.any(String), 'Sample Video', 'summary', expect.any(String));
     });
 
     it('increments aiCalls', async () => {
@@ -167,7 +167,7 @@ describe('processAndImport', () => {
       expect(result.success).toBe(true);
       expect(result.items).toHaveLength(1);
       expect(provider.summarize).toHaveBeenCalledTimes(1);
-      expect(provider.summarize).toHaveBeenCalledWith(expect.any(String), 'Sample Video', 'structured');
+      expect(provider.summarize).toHaveBeenCalledWith(expect.any(String), 'Sample Video', 'structured', expect.any(String));
       expect(deps.incrementUsage).toHaveBeenCalledWith('aiCalls');
     });
   });
@@ -334,6 +334,46 @@ describe('processAndImport', () => {
 
       expect(result.success).toBe(true);
       expect(result.items).toHaveLength(1);
+    });
+  });
+
+  describe('output language propagation', () => {
+    it('passes resolved language to provider.summarize based on video language', async () => {
+      const provider = makeMockProvider();
+      const deps = makeDefaultDeps(provider);
+      const cantoneseVideo: VideoContent = { ...SAMPLE_VIDEO, language: 'yue' };
+
+      await processAndImport(cantoneseVideo, { mode: 'summary' }, deps);
+
+      expect(provider.summarize).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        'summary',
+        'Cantonese',
+      );
+    });
+
+    it('honors user outputLanguage override over video language', async () => {
+      const provider = makeMockProvider();
+      const baseDeps = makeDefaultDeps(provider);
+      const baseSettings = await baseDeps.getSettings();
+      const overrideDeps: ProcessDeps = {
+        ...baseDeps,
+        getSettings: async () => ({
+          ...baseSettings,
+          outputLanguage: 'zh-TW',
+        }),
+      };
+      const cantoneseVideo: VideoContent = { ...SAMPLE_VIDEO, language: 'yue' };
+
+      await processAndImport(cantoneseVideo, { mode: 'summary' }, overrideDeps);
+
+      expect(provider.summarize).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        'summary',
+        'Traditional Chinese',
+      );
     });
   });
 

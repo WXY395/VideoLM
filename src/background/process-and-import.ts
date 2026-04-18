@@ -1,6 +1,7 @@
 import type { VideoContent, ImportOptions, UserSettings, AIProvider } from '@/types';
 import { formatTranscript } from '@/extractors/youtube-extractor';
 import { addMetadataHeader, type MetadataInput } from '@/processing/rag-optimizer';
+import { resolveOutputLanguage } from '@/ai/language';
 
 /**
  * Injectable dependencies for processAndImport.
@@ -68,6 +69,10 @@ export async function processAndImport(
   // 3. Format raw transcript
   const rawText = formatTranscript(videoContent.transcript, { timestamps: true });
   const meta = buildMeta(videoContent);
+  const language = resolveOutputLanguage(
+    settings.outputLanguage ?? 'auto',
+    videoContent.language,
+  );
 
   let items: Array<{ title: string; content: string }> = [];
 
@@ -81,7 +86,7 @@ export async function processAndImport(
 
       case 'structured':
       case 'summary': {
-        const processed = await provider.summarize(rawText, videoContent.title, options.mode);
+        const processed = await provider.summarize(rawText, videoContent.title, options.mode, language);
         if (needsAI) await deps.incrementUsage('aiCalls');
         const content = addMetadataHeader(processed, meta);
         items = [{ title: videoContent.title, content }];
@@ -93,7 +98,7 @@ export async function processAndImport(
         let chapters = videoContent.chapters ?? [];
 
         if (chapters.length === 0) {
-          chapters = await provider.splitChapters(rawText, videoContent.transcript);
+          chapters = await provider.splitChapters(rawText, videoContent.transcript, language);
           if (needsAI) await deps.incrementUsage('aiCalls');
         }
 

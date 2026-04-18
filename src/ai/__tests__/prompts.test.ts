@@ -64,7 +64,7 @@ describe('buildSummaryPrompt', () => {
 
 describe('buildChapterSplitPrompt', () => {
   it('includes JSON format instructions', () => {
-    const prompt = buildChapterSplitPrompt('some transcript');
+    const prompt = buildChapterSplitPrompt('some transcript', 'en');
     expect(prompt).toContain('chapterTitle');
     expect(prompt).toContain('startTime');
     expect(prompt).toContain('endTime');
@@ -72,19 +72,24 @@ describe('buildChapterSplitPrompt', () => {
   });
 
   it('specifies chapter count range', () => {
-    const prompt = buildChapterSplitPrompt('some transcript');
+    const prompt = buildChapterSplitPrompt('some transcript', 'en');
     expect(prompt).toMatch(/3.*8/);
   });
 
   it('specifies word count range per chapter', () => {
-    const prompt = buildChapterSplitPrompt('some transcript');
+    const prompt = buildChapterSplitPrompt('some transcript', 'en');
     expect(prompt).toContain('300');
     expect(prompt).toContain('2000');
   });
 
   it('includes the transcript', () => {
-    const prompt = buildChapterSplitPrompt('unique transcript content here');
+    const prompt = buildChapterSplitPrompt('unique transcript content here', 'en');
     expect(prompt).toContain('unique transcript content here');
+  });
+
+  it('instructs the AI to write chapters in the target language', () => {
+    const prompt = buildChapterSplitPrompt('some transcript', 'Traditional Chinese');
+    expect(prompt).toContain('Traditional Chinese');
   });
 });
 

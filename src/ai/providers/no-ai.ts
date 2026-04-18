@@ -8,13 +8,14 @@ import type { AIProvider, Chapter, ImportMode, TranscriptSegment } from '@/types
 export class NoAIProvider implements AIProvider {
   readonly name = 'no-ai';
 
-  async summarize(transcript: string, _videoTitle: string, _mode: ImportMode): Promise<string> {
+  async summarize(transcript: string, _videoTitle: string, _mode: ImportMode, _language: string): Promise<string> {
     return transcript;
   }
 
   async splitChapters(
     _transcript: string,
     _segments: TranscriptSegment[],
+    _language: string,
   ): Promise<Chapter[]> {
     return [];
   }

@@ -52,14 +52,14 @@ export class AnthropicDirectProvider implements AIProvider {
     return stripCodeFence(textBlock?.text ?? '');
   }
 
-  async summarize(transcript: string, videoTitle: string, mode: ImportMode): Promise<string> {
+  async summarize(transcript: string, videoTitle: string, mode: ImportMode, language: string): Promise<string> {
     if (mode === 'raw') return transcript;
     try {
       if (mode === 'summary') {
-        const prompt = buildSummaryPrompt(transcript, videoTitle, '', 'en');
+        const prompt = buildSummaryPrompt(transcript, videoTitle, '', language);
         return await this.chat(prompt);
       }
-      const prompt = buildStructuredPrompt(transcript, videoTitle, '', 0, 'en');
+      const prompt = buildStructuredPrompt(transcript, videoTitle, '', 0, language);
       return await this.chat(prompt);
     } catch (error) {
       console.error('Anthropic summarize failed:', error);
@@ -70,9 +70,10 @@ export class AnthropicDirectProvider implements AIProvider {
   async splitChapters(
     transcript: string,
     segments: TranscriptSegment[],
+    language: string,
   ): Promise<Chapter[]> {
     try {
-      const prompt = buildChapterSplitPrompt(transcript);
+      const prompt = buildChapterSplitPrompt(transcript, language);
       const result = await this.chat(prompt);
       const parsed: RawChapter[] = JSON.parse(result);
       return normalizeChapters(parsed, segments);

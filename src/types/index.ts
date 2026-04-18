@@ -82,8 +82,8 @@ export interface DynamicConfig {
 /** AI provider interface — see src/ai/types.ts for full definition */
 export interface AIProvider {
   name: string;
-  summarize(transcript: string, videoTitle: string, mode: ImportMode): Promise<string>;
-  splitChapters(transcript: string, segments: TranscriptSegment[]): Promise<Chapter[]>;
+  summarize(transcript: string, videoTitle: string, mode: ImportMode, language: string): Promise<string>;
+  splitChapters(transcript: string, segments: TranscriptSegment[], language: string): Promise<Chapter[]>;
   translate(content: string, targetLang: string): Promise<string>;
 }
 
@@ -106,6 +106,8 @@ export interface UserSettings {
   byok?: BYOKConfig;
   defaultMode: ImportMode;
   defaultTranslateLang?: string;
+  /** AI output language. 'auto' = match video's caption language. Any other value = ISO code like 'en', 'zh-TW', 'ja'. Default: 'auto'. */
+  outputLanguage?: 'auto' | string;
   duplicateStrategy: DuplicateStrategy;
   monthlyUsage: {
     imports: number;
