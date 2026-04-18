@@ -237,6 +237,18 @@
   "settings_dup_merge": { "message": "合併至現有筆記本" },
   "settings_dup_create": { "message": "總是建立新筆記本" },
   "settings_dup_global": { "message": "智慧全域去重" },
+  "settings_output_language": {
+    "message": "AI 輸出語言",
+    "description": "Label for the output language dropdown"
+  },
+  "settings_output_language_auto": {
+    "message": "自動（跟隨影片語言）",
+    "description": "Default option — output in same language as the video"
+  },
+  "settings_output_language_help": {
+    "message": "選擇 AI 摘要與結構化輸出使用的語言。「自動」會跟隨影片字幕的語言。",
+    "description": "Help text for output language dropdown"
+  },
   "settings_api_hint": { "message": "API 金鑰僅儲存於本機，不會傳送至任何伺服器。" },
   "settings_saved": { "message": "已儲存！" },
   "settings_save": { "message": "儲存" },

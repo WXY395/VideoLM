@@ -383,6 +383,18 @@
   "settings_dup_merge": { "message": "Merge into existing notebook" },
   "settings_dup_create": { "message": "Always create new notebook" },
   "settings_dup_global": { "message": "Smart global dedup" },
+  "settings_output_language": {
+    "message": "AI Output Language",
+    "description": "Label for the output language dropdown"
+  },
+  "settings_output_language_auto": {
+    "message": "Auto (match video language)",
+    "description": "Default option — output in same language as the video"
+  },
+  "settings_output_language_help": {
+    "message": "Choose the language AI uses for summaries and structured output. 'Auto' matches the video's caption language.",
+    "description": "Help text for output language dropdown"
+  },
   "settings_api_hint": { "message": "Your API key is stored locally and never sent to our servers." },
   "settings_saved": { "message": "Saved!" },
   "settings_save": { "message": "Save" },
