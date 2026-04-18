@@ -28,14 +28,16 @@ export function resolveOutputLanguage(
     normalized === 'zh-tw' ||
     normalized === 'zh-hk' ||
     normalized === 'zh-mo' ||
-    normalized.startsWith('zh-hant')
+    normalized === 'zh-hant' ||
+    normalized.startsWith('zh-hant-')
   ) {
     return 'Traditional Chinese';
   }
   if (
     normalized === 'zh-cn' ||
     normalized === 'zh-sg' ||
-    normalized.startsWith('zh-hans')
+    normalized === 'zh-hans' ||
+    normalized.startsWith('zh-hans-')
   ) {
     return 'Simplified Chinese';
   }

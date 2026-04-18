@@ -52,12 +52,11 @@ describe('resolveOutputLanguage', () => {
       expect(resolveOutputLanguage('auto', 'xyz-invalid-999')).toBe('English');
     });
 
-    it('passes through raw code when Intl cannot resolve but code is plausible', () => {
-      // Rare / obscure codes still helpful to AI
-      const result = resolveOutputLanguage('auto', 'zh-Hant-HK');
-      // Should either resolve to a human name or fall back to English
-      expect(result).toBeTruthy();
-      expect(result.length).toBeGreaterThan(0);
+    it('resolves zh-Hant-HK to Traditional Chinese via normalization layer', () => {
+      // zh-Hant-HK has script subtag "Hant" which should normalize to Traditional
+      // regardless of region, not pass through to Intl.DisplayNames (which would
+      // return the more verbose "Chinese (Traditional, Hong Kong SAR China)")
+      expect(resolveOutputLanguage('auto', 'zh-Hant-HK')).toBe('Traditional Chinese');
     });
   });
 });
