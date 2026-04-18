@@ -1,6 +1,7 @@
 # VideoLM — Chrome Web Store Listing (Final)
 
-> **Current version on CWS:** v0.3.0 (submitted 2026-04-17)
+> **Current version:** v0.3.1 (GitHub released 2026-04-19; CWS submission pending)
+> **Last CWS-approved version:** v0.3.0 (approved 2026-04-18)
 > **Note:** Contact email on the live CWS listing may differ from the `support@videolm.dev` shown in this file. See the CWS Developer Dashboard for the current value.
 
 ---
@@ -40,6 +41,19 @@ Stop copy-pasting URLs one by one. VideoLM adds a native NotebookLM button direc
 
 Whether you're a researcher building a knowledge base, a student preparing for exams, or a podcaster curating source material, VideoLM bridges the gap between YouTube and NotebookLM's powerful AI analysis.
 
+
+========================================
+WHAT'S NEW IN v0.3.1 (Apr 2026)
+========================================
+
+AI OUTPUT LANGUAGE
+• Summaries, structured docs, and chapter splits now match the video's language by default (Cantonese video → Cantonese summary, Japanese video → Japanese summary, etc.)
+• New "AI Output Language" dropdown in Settings with 9 preset options (Auto + English, Traditional/Simplified Chinese, Japanese, Korean, Spanish, French, German)
+• "Auto" setting matches the video's caption language; override saves tokens vs. post-translate double-hop
+
+FIXES
+• AI structured mode now explicitly instructs output language (previously only a metadata label, causing English output for non-English videos)
+• AI chapter mode now respects output language (chapter titles and summaries in the target language)
 
 ========================================
 WHAT'S NEW IN v0.3.0 (Apr 2026)
@@ -148,6 +162,19 @@ VideoLM：您的 YouTube 轉 NotebookLM 智慧橋樑
 
 別再浪費時間一個一個複製貼上網址了！VideoLM 專為 AI 研究者、學生與內容創作者設計，讓您在 YouTube 頁面直接「一鍵匯入」所有內容到 Google NotebookLM。
 
+
+========================================
+v0.3.1 更新內容（2026 年 4 月）
+========================================
+
+【AI 輸出語言】
+• 摘要、結構化文件、章節拆分現在會預設跟隨影片語言（廣東話影片 → 廣東話摘要、日文影片 → 日文摘要等）
+• Settings 新增「AI 輸出語言」下拉選單，9 個預設選項（自動 + 英文、繁/簡中、日文、韓文、西文、法文、德文）
+• 「自動」會跟隨字幕語言；手動指定則省 token（不用事後再翻譯）
+
+【修復】
+• AI 結構化模式現在明確指示輸出語言（之前只在 metadata 標示，導致非英文影片仍輸出英文）
+• AI 章節拆分模式現在支援輸出語言設定（章節標題與摘要會用目標語言）
 
 ========================================
 v0.3.0 更新內容（2026 年 4 月）
