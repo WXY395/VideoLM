@@ -14,7 +14,13 @@
 import { FetchInterceptor, type CapturedRequest } from '@/nlm/fetch-interceptor';
 import { DomAutomation } from '@/nlm/dom-automation';
 import { NLM } from '@/config/selectors';
-import type { DynamicConfig, VideoContent, VideoSourceRecord, NlmSourceEntry } from '@/types';
+import type {
+  DynamicConfig,
+  ObsidianExportSettings,
+  VideoContent,
+  VideoSourceRecord,
+  NlmSourceEntry,
+} from '@/types';
 import {
   collectProtectedCitationMatches,
   wrapVideoCitationTransport,
@@ -22,6 +28,10 @@ import {
   finalizeForNotionHtml,
   type CitationMap,
 } from '@/utils/notion-sync';
+import {
+  buildObsidianMarkdownFilename,
+  finalizeForObsidian,
+} from '@/utils/obsidian-sync';
 import {
   buildFingerprintIndex,
   resolveCitation,
@@ -289,6 +299,25 @@ function isNotebookPage(): boolean {
   return /\/notebook\//.test(location.href);
 }
 
+function getObsidianExportTitle(): string {
+  return document.title
+    .replace(/\s*[-|]\s*NotebookLM\s*$/i, '')
+    .trim() || 'NotebookLM Answer';
+}
+
+function downloadMarkdownFile(markdown: string, filename: string): void {
+  const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.rel = 'noopener';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 // ---------------------------------------------------------------------------
 // Selector fallback helper (inline — cannot import dom.ts in content script
 // since it references `document` which may differ per context)
@@ -373,6 +402,9 @@ const NOTION_BTN_STYLES = `
     pointer-events: auto;
     white-space: nowrap;
     line-height: 1.4;
+  }
+  .vlm-notion-btn + .vlm-notion-btn {
+    margin-left: 4px;
   }
   .vlm-notion-btn:hover {
     background: color-mix(in srgb, var(--mat-sys-primary, #1a73e8) 8%, var(--mat-sys-surface-container, #f1f3f4));
@@ -1065,6 +1097,130 @@ async function handleQuickFix(
   }
 }
 
+interface NotebookLmCitationExport {
+  protectedText: string;
+  citationMap: CitationMap;
+  transportBlock: string;
+  lowConfidenceItems: Array<{ id: number; sourceName: string }>;
+  sourceIndex: VideoSourceRecord[];
+}
+
+async function prepareNotebookLmCitationExport(
+  contentRoot: Element,
+  cardEl: Element,
+): Promise<NotebookLmCitationExport> {
+  const { protectedText, citationHints, citationSourceNames } = await prepareNlmResponseForNotion(contentRoot, cardEl);
+
+  if (!protectedText.trim()) {
+    return {
+      protectedText,
+      citationMap: {},
+      transportBlock: '',
+      lowConfidenceItems: [],
+      sourceIndex: [],
+    };
+  }
+
+  const indexResponse = await sendMsgAsync<{ index: VideoSourceRecord[] }>({ type: 'GET_SOURCE_INDEX' });
+  const sourceIndex = indexResponse?.index ?? [];
+  const fpIndex = buildFingerprintIndex(sourceIndex);
+  const citationMap: CitationMap = {};
+
+  for (const csn of citationSourceNames) {
+    const match = resolveCitation(csn.sourceName, fpIndex, sourceIndex);
+    if (match.record?.url) {
+      const confidence = match.type === 'matched' ? 'high' as const
+        : match.type === 'uncertain' ? 'medium' as const
+        : 'low' as const;
+      citationMap[String(csn.id)] = { url: match.record.url, confidence, status: 'resolved', sourceName: csn.sourceName };
+    }
+  }
+
+  const unresolvedAfterPrimary = citationSourceNames
+    .filter(csn => {
+      const entry = citationMap[String(csn.id)];
+      return !entry?.url || entry.confidence === 'low';
+    });
+
+  if (unresolvedAfterPrimary.length > 0 && nlmSourceCache.size > 0) {
+    const backfill = resolveViaCacheBackfill(
+      unresolvedAfterPrimary, nlmSourceCache, sourceIndex,
+    );
+    for (const [idStr, res] of backfill.resolved) {
+      citationMap[idStr] = {
+        url: res.url,
+        confidence: res.confidence,
+        status: 'resolved',
+        sourceName: citationMap[idStr]?.sourceName,
+      };
+      if (res.confidence === 'high') {
+        const cacheEntry = nlmSourceCache.get(res.videoId);
+        const record = createVideoSourceRecord(
+          res.videoId,
+          citationMap[idStr]?.sourceName ?? '',
+          cacheEntry?.channelName ?? '',
+          res.url,
+        );
+        record.source = 'nlm_backfill';
+        sendMsgAsync({ type: 'STORE_SOURCE_RECORD', record });
+      }
+    }
+  }
+
+  for (const hint of citationHints) {
+    const key = String(hint.id);
+    if (!citationMap[key]?.url && hint.href) {
+      citationMap[key] = { url: hint.href, confidence: 'low', status: 'resolved' };
+    }
+  }
+
+  const unresolvedKeys = citationSourceNames
+    .filter(csn => !citationMap[String(csn.id)]?.url)
+    .map(csn => String(csn.id));
+  const uniqueSourceCount = new Set(citationSourceNames.map(csn => csn.sourceName)).size;
+  if (unresolvedKeys.length > 0 && uniqueSourceCount <= 1) {
+    const videoContent = await getStoredVideoContent();
+    if (videoContent?.url) {
+      for (const key of unresolvedKeys) {
+        citationMap[key] = {
+          url: videoContent.url,
+          confidence: 'medium',
+          status: 'resolved',
+          sourceName: citationMap[key]?.sourceName,
+        };
+      }
+    }
+  }
+
+  for (const csn of citationSourceNames) {
+    const key = String(csn.id);
+    if (citationMap[key] === undefined) {
+      citationMap[key] = { ...createFallbackEntry(), sourceName: csn.sourceName };
+    } else if (!citationMap[key].sourceName) {
+      citationMap[key].sourceName = csn.sourceName;
+    }
+  }
+
+  const lowConfidenceItems: Array<{ id: number; sourceName: string }> = [];
+  const seenSourceNames = new Set<string>();
+  for (const csn of citationSourceNames) {
+    const entry = citationMap[String(csn.id)];
+    const confidence = entry?.confidence ?? 'low';
+    if (confidence === 'high' || confidence === 'medium') continue;
+    if (seenSourceNames.has(csn.sourceName)) continue;
+    seenSourceNames.add(csn.sourceName);
+    lowConfidenceItems.push({ id: csn.id, sourceName: csn.sourceName });
+  }
+
+  return {
+    protectedText,
+    citationMap,
+    transportBlock: wrapVideoCitationTransport(protectedText, citationMap),
+    lowConfidenceItems,
+    sourceIndex,
+  };
+}
+
 /**
  * Create a Shadow DOM-isolated "Copy for Notion" button and attach it
  * to the AI response card's toolbar (mat-card-actions.message-actions).
@@ -1078,22 +1234,26 @@ async function handleQuickFix(
  *       chat-actions.actions-container
  *         div.action > div > span > button
  */
-function injectNotionButton(cardEl: Element, retryCount = 0): void {
+function injectNotionButton(cardEl: Element, retryCount = 0): boolean {
   // Find the toolbar inside this card
   const toolbar = qf(NLM.RESPONSE_TOOLBAR, cardEl);
 
   if (!toolbar) {
     // Toolbar may render after text content — retry up to 3×500ms
     if (retryCount < TOOLBAR_RETRY_LIMIT) {
-      setTimeout(() => injectNotionButton(cardEl, retryCount + 1), TOOLBAR_RETRY_MS);
+      setTimeout(() => {
+        if (injectNotionButton(cardEl, retryCount + 1)) {
+          processedCards.add(cardEl);
+        }
+      }, TOOLBAR_RETRY_MS);
     } else {
       console.log('[VideoLM] No toolbar found in response card after retries, skipping');
     }
-    return;
+    return false;
   }
 
   // Prevent duplicate injection
-  if (toolbar.querySelector(`.${NOTION_BTN_HOST_CLASS}`)) return;
+  if (toolbar.querySelector(`.${NOTION_BTN_HOST_CLASS}`)) return true;
 
   // Find the text content element (for reading on click)
   const textEl = qf(NLM.RESPONSE_TEXT, cardEl);
@@ -1367,10 +1527,162 @@ function injectNotionButton(cardEl: Element, retryCount = 0): void {
     }
   });
 
+  const obsidianBtn = document.createElement('button');
+  obsidianBtn.className = 'vlm-notion-btn';
+  obsidianBtn.setAttribute('aria-label', 'Copy for Obsidian');
+
+  const obsidianIconSpan = document.createElement('span');
+  obsidianIconSpan.className = 'vlm-notion-btn__icon';
+  obsidianIconSpan.textContent = '\u{1F4DD}';
+
+  const obsidianLabelSpan = document.createElement('span');
+  obsidianLabelSpan.textContent = 'Obsidian';
+
+  obsidianBtn.appendChild(obsidianIconSpan);
+  obsidianBtn.appendChild(obsidianLabelSpan);
+
+  const downloadBtn = document.createElement('button');
+  downloadBtn.className = 'vlm-notion-btn';
+  downloadBtn.setAttribute('aria-label', 'Download Obsidian Markdown');
+
+  const downloadIconSpan = document.createElement('span');
+  downloadIconSpan.className = 'vlm-notion-btn__icon';
+  downloadIconSpan.textContent = '\u21E9';
+
+  const downloadLabelSpan = document.createElement('span');
+  downloadLabelSpan.textContent = '.md';
+
+  downloadBtn.appendChild(downloadIconSpan);
+  downloadBtn.appendChild(downloadLabelSpan);
+
+  obsidianBtn.addEventListener('click', async () => {
+    if (obsidianBtn.classList.contains('vlm-notion-btn--success')) return;
+
+    const originalLabel = obsidianLabelSpan.textContent;
+    obsidianLabelSpan.textContent = '...';
+    obsidianBtn.classList.remove('vlm-notion-btn--warning', 'vlm-notion-btn--error');
+
+    try {
+      const contentRoot = (textEl ?? cardEl) as Element;
+      const { protectedText, citationMap, transportBlock, lowConfidenceItems } =
+        await prepareNotebookLmCitationExport(contentRoot, cardEl);
+
+      if (!protectedText.trim()) {
+        obsidianLabelSpan.textContent = '\u2718';
+        obsidianBtn.classList.add('vlm-notion-btn--error');
+        setTimeout(() => {
+          obsidianLabelSpan.textContent = originalLabel;
+          obsidianBtn.classList.remove('vlm-notion-btn--error');
+        }, 2000);
+        return;
+      }
+
+      const obsidianSettings = await getObsidianExportSettings();
+      const markdown = finalizeForObsidian(transportBlock, citationMap, {
+        title: getObsidianExportTitle(),
+        tags: obsidianSettings.defaultTags,
+        includeEvidenceMap: obsidianSettings.includeEvidenceMap,
+        includeFollowups: obsidianSettings.includeFollowups,
+        includeSources: obsidianSettings.includeSources,
+      });
+      await navigator.clipboard.writeText(markdown);
+
+      if (lowConfidenceItems.length > 0) {
+        obsidianLabelSpan.textContent = `\u26A0 ${lowConfidenceItems.length} \u500B\u4F86\u6E90`;
+        obsidianBtn.classList.add('vlm-notion-btn--warning');
+        console.warn('[VideoLM] Obsidian copy has low-confidence source(s):', lowConfidenceItems);
+        setTimeout(() => {
+          obsidianLabelSpan.textContent = originalLabel;
+          obsidianBtn.classList.remove('vlm-notion-btn--warning');
+        }, 3000);
+      } else {
+        obsidianLabelSpan.textContent = '\u2714';
+        obsidianBtn.classList.add('vlm-notion-btn--success');
+        setTimeout(() => {
+          obsidianLabelSpan.textContent = originalLabel;
+          obsidianBtn.classList.remove('vlm-notion-btn--success');
+        }, 2000);
+      }
+    } catch (err) {
+      console.error('[VideoLM] Obsidian copy failed:', err);
+      obsidianLabelSpan.textContent = '\u2718';
+      obsidianBtn.classList.add('vlm-notion-btn--error');
+      setTimeout(() => {
+        obsidianLabelSpan.textContent = originalLabel;
+        obsidianBtn.classList.remove('vlm-notion-btn--error');
+      }, 2000);
+    }
+  });
+
+  downloadBtn.addEventListener('click', async () => {
+    if (downloadBtn.classList.contains('vlm-notion-btn--success')) return;
+
+    const originalLabel = downloadLabelSpan.textContent;
+    downloadLabelSpan.textContent = '...';
+    downloadBtn.classList.remove('vlm-notion-btn--warning', 'vlm-notion-btn--error');
+
+    try {
+      const contentRoot = (textEl ?? cardEl) as Element;
+      const { protectedText, citationMap, transportBlock, lowConfidenceItems } =
+        await prepareNotebookLmCitationExport(contentRoot, cardEl);
+
+      if (!protectedText.trim()) {
+        downloadLabelSpan.textContent = '\u2718';
+        downloadBtn.classList.add('vlm-notion-btn--error');
+        setTimeout(() => {
+          downloadLabelSpan.textContent = originalLabel;
+          downloadBtn.classList.remove('vlm-notion-btn--error');
+        }, 2000);
+        return;
+      }
+
+      const title = getObsidianExportTitle();
+      const obsidianSettings = await getObsidianExportSettings();
+      const markdown = finalizeForObsidian(transportBlock, citationMap, {
+        title,
+        tags: obsidianSettings.defaultTags,
+        includeEvidenceMap: obsidianSettings.includeEvidenceMap,
+        includeFollowups: obsidianSettings.includeFollowups,
+        includeSources: obsidianSettings.includeSources,
+      });
+      downloadMarkdownFile(markdown, buildObsidianMarkdownFilename(title, {
+        template: obsidianSettings.fileNameTemplate,
+      }));
+
+      if (lowConfidenceItems.length > 0) {
+        downloadLabelSpan.textContent = `\u26A0 ${lowConfidenceItems.length}`;
+        downloadBtn.classList.add('vlm-notion-btn--warning');
+        console.warn('[VideoLM] Obsidian download has low-confidence source(s):', lowConfidenceItems);
+        setTimeout(() => {
+          downloadLabelSpan.textContent = originalLabel;
+          downloadBtn.classList.remove('vlm-notion-btn--warning');
+        }, 3000);
+      } else {
+        downloadLabelSpan.textContent = '\u2714';
+        downloadBtn.classList.add('vlm-notion-btn--success');
+        setTimeout(() => {
+          downloadLabelSpan.textContent = originalLabel;
+          downloadBtn.classList.remove('vlm-notion-btn--success');
+        }, 2000);
+      }
+    } catch (err) {
+      console.error('[VideoLM] Obsidian download failed:', err);
+      downloadLabelSpan.textContent = '\u2718';
+      downloadBtn.classList.add('vlm-notion-btn--error');
+      setTimeout(() => {
+        downloadLabelSpan.textContent = originalLabel;
+        downloadBtn.classList.remove('vlm-notion-btn--error');
+      }, 2000);
+    }
+  });
+
   shadow.appendChild(btn);
+  shadow.appendChild(obsidianBtn);
+  shadow.appendChild(downloadBtn);
 
   // Insert into the toolbar (mat-card-actions) — next to copy/thumbs buttons
   toolbar.appendChild(host);
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1387,6 +1699,23 @@ function sendMsgAsync<T = any>(msg: any): Promise<T> {
       resolve(r);
     });
   });
+}
+
+const DEFAULT_OBSIDIAN_EXPORT_SETTINGS: ObsidianExportSettings = {
+  fileNameTemplate: '{{title}} - {{date}}',
+  defaultTags: ['videolm', 'notebooklm'],
+  includeEvidenceMap: true,
+  includeFollowups: true,
+  includeSources: true,
+  citationStyle: 'footnotes',
+};
+
+async function getObsidianExportSettings(): Promise<ObsidianExportSettings> {
+  const response = await sendMsgAsync<{ type?: string; data?: ObsidianExportSettings }>({ type: 'GET_OBSIDIAN_SETTINGS' });
+  return {
+    ...DEFAULT_OBSIDIAN_EXPORT_SETTINGS,
+    ...(response?.data ?? {}),
+  };
 }
 
 /**
@@ -1469,8 +1798,9 @@ function scanAndInject(): void {
   const responseCards = qfAll(NLM.RESPONSE_CARD);
   for (const card of responseCards) {
     if (processedCards.has(card)) continue;
-    processedCards.add(card);
-    injectNotionButton(card);
+    if (injectNotionButton(card)) {
+      processedCards.add(card);
+    }
   }
 }
 
@@ -1490,10 +1820,6 @@ function debouncedScan(): void {
 
 function startResponseObserver(): void {
   if (responseObserver) return;
-  if (!isNotebookPage()) {
-    console.log('VideoLM: Not a notebook page, skipping response observer');
-    return;
-  }
 
   responseObserver = new MutationObserver((mutations) => {
     let relevant = false;
@@ -1528,8 +1854,8 @@ function startResponseObserver(): void {
 
 /** Retry-based startup: if no cards found yet, retry a few times */
 function scanWithRetry(retriesLeft = 3): void {
-  if (!isNotebookPage()) return;
   startResponseObserver();
+  if (!isNotebookPage()) return;
   const cards = qfAll(NLM.RESPONSE_CARD);
   if (cards.length === 0 && retriesLeft > 0) {
     setTimeout(() => scanWithRetry(retriesLeft - 1), 1500);
@@ -1547,7 +1873,22 @@ if ('navigation' in window) {
   (window as any).navigation.addEventListener('navigateSuccess', () => {
     setTimeout(() => scanWithRetry(), 1000);
   });
+  (window as any).navigation.addEventListener('navigatesuccess', () => {
+    setTimeout(() => scanWithRetry(), 1000);
+  });
+  (window as any).navigation.addEventListener('currententrychange', () => {
+    setTimeout(() => scanWithRetry(), 1000);
+  });
 }
+
+window.addEventListener('popstate', () => setTimeout(() => scanWithRetry(), 1000));
+window.addEventListener('hashchange', () => setTimeout(() => scanWithRetry(), 1000));
+window.addEventListener('pageshow', () => setTimeout(() => scanWithRetry(), 1000));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    setTimeout(() => scanWithRetry(), 1000);
+  }
+});
 
 // batchexecute XHR interceptor is installed via nlm-source-interceptor.ts
 // (MAIN world content script, document_start) — no injectScript needed.

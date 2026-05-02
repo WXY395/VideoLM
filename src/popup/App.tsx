@@ -36,7 +36,7 @@ interface ProgressItem {
 
 export function App() {
   const { content, loading: contentLoading, error: contentError, batchUrls, pageType, pageTitle } = useVideoContent();
-  const { settings, updateSettings } = useSettings();
+  const { settings, updateSettings, refreshEntitlement } = useSettings();
   const [showSettings, setShowSettings] = useState(false);
 
   const [mode, setMode] = useState<ImportMode>('quick');
@@ -361,6 +361,7 @@ export function App() {
         <SettingsPage
           settings={settings}
           onSave={updateSettings}
+          onRefreshEntitlement={refreshEntitlement}
           onBack={() => setShowSettings(false)}
         />
       </div>

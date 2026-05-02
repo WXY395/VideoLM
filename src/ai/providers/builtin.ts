@@ -25,8 +25,7 @@ export class BuiltinProvider implements AIProvider {
 
     if (!response.ok) {
       const error = await response.text();
-      console.error(`Backend error (${response.status}): ${error}`);
-      return {} as T;
+      throw new Error(`Backend error (${response.status}): ${error}`);
     }
 
     return response.json() as Promise<T>;
@@ -39,6 +38,7 @@ export class BuiltinProvider implements AIProvider {
       mode,
       language,
     });
+    if (!result.content) throw new Error('Backend returned empty summary content.');
     return result.content;
   }
 
@@ -52,7 +52,8 @@ export class BuiltinProvider implements AIProvider {
       language,
     });
 
-    const backendChapters = result.chapters ?? [];
+    if (!Array.isArray(result.chapters)) throw new Error('Backend returned invalid chapters payload.');
+    const backendChapters = result.chapters;
 
     // If the backend returned no chapters at all, just pass the empty list through.
     if (backendChapters.length === 0) return [];
@@ -78,6 +79,7 @@ export class BuiltinProvider implements AIProvider {
       content,
       targetLang,
     });
+    if (!result.content) throw new Error('Backend returned empty translation content.');
     return result.content;
   }
 }

@@ -11,16 +11,25 @@ dist
 .competitor-analysis/
 docs/plans/
 docs/ENGINEERING_SNAPSHOT.md
+docs/release-checklist-*.md
+docs/server-entitlement-quota.md
+PROJECT_SNAPSHOT.md
 store/
 backend/
 
 # CWS submission assets (keep final only, no drafts)
 store-assets/public-repo/
 store-assets/*draft*
+store-assets/screenshots/Snipaste_*.png
+store-assets/screenshots/*.html
 
 # Dev tool logs
 .playwright-mcp/
 logo-concepts/
+output/
 
 # Claude Code worktrees
 .claude/worktrees/
+
+# Generated submission bundles; store-assets/ is the editable source of truth
+videolm-cws-submission-assets/

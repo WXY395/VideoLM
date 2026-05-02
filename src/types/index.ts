@@ -100,6 +100,45 @@ export interface BYOKConfig {
 /** How to handle duplicate notebooks when importing */
 export type DuplicateStrategy = 'ask' | 'merge' | 'create' | 'global-dedup';
 
+export type EntitlementPlan = 'free' | 'pro';
+export type QuotaOperation = 'imports' | 'aiCalls';
+
+export interface ServerEntitlementSnapshot {
+  subjectId: string;
+  plan: EntitlementPlan;
+  periodStart: string;
+  periodEnd: string;
+  limits: {
+    imports: number | null;
+    aiCalls: number | null;
+  };
+  usage: {
+    imports: number;
+    aiCalls: number;
+  };
+}
+
+export interface EntitlementSettings {
+  backendUrl: string;
+  installId?: string;
+  authToken?: string;
+  licenseKey?: string;
+  snapshot?: ServerEntitlementSnapshot;
+  lastSyncedAt?: number;
+}
+
+/** Obsidian export customization. */
+export interface ObsidianExportSettings {
+  /** File name template for .md downloads. Supported: {{title}}, {{notebook_title}}, {{date}}. */
+  fileNameTemplate: string;
+  /** Comma-separated UI input is normalized into this array. */
+  defaultTags: string[];
+  includeEvidenceMap: boolean;
+  includeFollowups: boolean;
+  includeSources: boolean;
+  citationStyle: 'footnotes';
+}
+
 /** User-persisted settings */
 export interface UserSettings {
   tier: 'free' | 'pro';
@@ -109,6 +148,8 @@ export interface UserSettings {
   /** AI output language. 'auto' = match video's caption language. Any other value = ISO code like 'en', 'zh-TW', 'ja'. Default: 'auto'. */
   outputLanguage?: 'auto' | string;
   duplicateStrategy: DuplicateStrategy;
+  entitlement?: EntitlementSettings;
+  obsidian?: ObsidianExportSettings;
   monthlyUsage: {
     imports: number;
     aiCalls: number;
@@ -215,7 +256,10 @@ export type MessageType =
   | { type: 'CONFIG'; data: DynamicConfig }
   | { type: 'GET_SETTINGS' }
   | { type: 'SETTINGS'; data: UserSettings }
+  | { type: 'GET_OBSIDIAN_SETTINGS' }
+  | { type: 'OBSIDIAN_SETTINGS'; data?: ObsidianExportSettings }
   | { type: 'SAVE_SETTINGS'; settings: UserSettings }
+  | { type: 'REFRESH_ENTITLEMENT' }
   | { type: 'PROCESS_AND_IMPORT'; videoContent: VideoContent; options: ImportOptions }
   | { type: 'QUICK_IMPORT'; videoUrl: string | string[]; videoTitle?: string }
   | { type: 'CHECK_DUPLICATE'; videoId: string; videoTitle: string }

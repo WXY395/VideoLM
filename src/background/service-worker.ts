@@ -13,7 +13,15 @@ import { resolveProvider } from '@/ai/provider-manager';
 import { extractVideoId, parseXMLCaptions } from '@/extractors/youtube-extractor';
 import { processAndImport } from './process-and-import';
 import { checkDuplicateByTitle } from '@/processing/duplicate-detector';
-import { getSettings, saveSettings, incrementUsage, checkQuota } from './usage-tracker';
+import {
+  getSettings,
+  saveUserPreferences,
+  reserveImportQuota,
+  refundImportQuota,
+  incrementUsage,
+  checkQuota,
+} from './usage-tracker';
+import { reRegisterServerEntitlement, refundEntitledQuota, reserveEntitledQuota } from './entitlement-client';
 import { sanitizeYouTubeUrl, deduplicateUrls } from '@/utils/url-sanitizer';
 import {
   createBatchQueue,
@@ -110,6 +118,13 @@ function defaultProcessDeps() {
     getSettings,
     checkQuota,
     incrementUsage,
+    reserveUsage: async (key: 'imports' | 'aiCalls', count = 1) => {
+      const remoteQuota = await reserveEntitledQuota(key, count);
+      return { allowed: remoteQuota.allowed, error: remoteQuota.error, reservationId: remoteQuota.reservationId };
+    },
+    refundUsage: async (key: 'imports' | 'aiCalls', reservationId: string, count?: number) => {
+      await refundEntitledQuota(key, reservationId, count);
+    },
     resolveProvider,
     t,
   };
@@ -384,6 +399,17 @@ async function importUrlsToNlm(
 
   // Step 2: Build sources array — ALL URLs in one API call (like competitor)
   const validUrls = urls.filter(Boolean);
+  const remoteQuota = await reserveEntitledQuota('imports', validUrls.length);
+  if (!remoteQuota.allowed) {
+    return {
+      success: false,
+      clipboardText: urls.join('\n'),
+      urlCount,
+      error: t('error_quota_exceeded'),
+      notebookId,
+      authuser,
+    };
+  }
   const sources = validUrls.map(url =>
     url.includes('youtube.com')
       ? [null, null, null, null, null, null, null, [url]]   // YouTube URL
@@ -449,7 +475,12 @@ async function importUrlsToNlm(
   } catch { /* ignore */ }
 
   if (totalSuccess > 0) {
-    await incrementUsage('imports', totalSuccess);
+    const unusedReservation = validUrls.length - totalSuccess;
+    if (unusedReservation > 0) {
+      if (remoteQuota.reservationId) {
+        await refundEntitledQuota('imports', remoteQuota.reservationId, unusedReservation);
+      }
+    }
     // Record in global dedup cache so future imports skip these videos
     await addToDedupCache(validUrls);
     const failCount = validUrls.length - totalSuccess;
@@ -459,6 +490,9 @@ async function importUrlsToNlm(
     if (failCount > 0) msg += ` (${failCount} failed)`;
     return { success: true, message: msg, urlCount: totalSuccess, notebookId, authuser };
   } else {
+    if (remoteQuota.reservationId) {
+      await refundEntitledQuota('imports', remoteQuota.reservationId, validUrls.length);
+    }
     return {
       success: false, clipboardText: urls.join('\n'), urlCount,
       error: lastError || t('error_api_failed'), notebookId, authuser,
@@ -1183,10 +1217,30 @@ chrome.runtime.onMessage.addListener(
         return true;
       }
 
+      case 'GET_OBSIDIAN_SETTINGS': {
+        getSettings().then((settings) => {
+          sendResponse({ type: 'OBSIDIAN_SETTINGS', data: settings.obsidian });
+        });
+        return true;
+      }
+
       case 'SAVE_SETTINGS': {
-        saveSettings(message.settings).then(() => {
+        saveUserPreferences(message.settings).then(() => {
           sendResponse({ success: true });
         });
+        return true;
+      }
+
+      case 'REFRESH_ENTITLEMENT' as any: {
+        (async () => {
+          try {
+            const entitlement = await reRegisterServerEntitlement();
+            const settings = await getSettings();
+            sendResponse({ success: true, entitlement, settings });
+          } catch (err) {
+            sendResponse({ success: false, error: String(err) });
+          }
+        })();
         return true;
       }
 

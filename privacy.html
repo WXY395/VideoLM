@@ -3,132 +3,117 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>VideoLM — Privacy Policy</title>
+  <title>VideoLM - Privacy Policy</title>
   <style>
-    :root { --bg: #0D1B2A; --card: #1B2838; --text: #E0E0E0; --muted: #9AA0A6; --accent: #00838F; }
+    :root { --bg: #0d1b2a; --card: #1b2838; --text: #e0e0e0; --muted: #9aa0a6; --accent: #00838f; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
-    .container { max-width: 720px; margin: 0 auto; padding: 48px 24px; }
+    .container { max-width: 760px; margin: 0 auto; padding: 48px 24px; }
     h1 { font-size: 28px; margin-bottom: 8px; color: #fff; }
-    .subtitle { color: var(--muted); margin-bottom: 32px; font-size: 14px; }
     h2 { font-size: 18px; color: var(--accent); margin: 32px 0 12px; }
-    h3 { font-size: 16px; color: #fff; margin: 20px 0 8px; }
     p, li { font-size: 15px; color: var(--text); margin-bottom: 8px; }
     ul { padding-left: 24px; }
-    li { margin-bottom: 6px; }
+    .subtitle { color: var(--muted); margin-bottom: 32px; font-size: 14px; }
     .card { background: var(--card); border-radius: 12px; padding: 24px; margin: 16px 0; border: 1px solid rgba(255,255,255,0.06); }
+    .badge { display: inline-block; background: var(--accent); color: #fff; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; margin-left: 8px; vertical-align: middle; }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
-    .badge { display: inline-block; background: var(--accent); color: #fff; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; margin-left: 8px; vertical-align: middle; }
-    .footer { margin-top: 48px; padding-top: 24px; border-top: 1px solid rgba(255,255,255,0.08); color: var(--muted); font-size: 13px; text-align: center; }
     table { width: 100%; border-collapse: collapse; margin: 12px 0; }
-    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.08); font-size: 14px; }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.08); font-size: 14px; vertical-align: top; }
     th { color: var(--accent); font-weight: 600; }
+    .footer { margin-top: 48px; padding-top: 24px; border-top: 1px solid rgba(255,255,255,0.08); color: var(--muted); font-size: 13px; text-align: center; }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>VideoLM <span class="badge">Privacy Policy</span></h1>
-    <p class="subtitle">Last updated: April 17, 2026</p>
+    <p class="subtitle">Last updated: May 3, 2026</p>
 
     <div class="card">
-      <p><strong>VideoLM does not collect, transmit, or sell any personal information. All data processing occurs locally in your browser.</strong></p>
+      <p><strong>VideoLM does not sell personal data, run advertising tracking, or collect analytics.</strong></p>
+      <p>VideoLM processes YouTube and NotebookLM data only to provide its import, export, duplicate detection, license, quota, and optional AI features.</p>
     </div>
 
-    <!-- ====== 1. DATA COLLECTION ====== -->
-    <h2>1. Data We Collect</h2>
-    <p>VideoLM processes the following data locally in your browser. <strong>None of this data is sent to our servers</strong> because we do not operate any servers.</p>
-
+    <h2>1. Data We Process</h2>
     <table>
       <tr><th>Data Type</th><th>Source</th><th>Purpose</th></tr>
-      <tr><td>YouTube video URLs</td><td>Pages you visit on youtube.com</td><td>Import videos into NotebookLM</td></tr>
-      <tr><td>YouTube video titles</td><td>Pages you visit on youtube.com</td><td>Name notebooks and detect duplicates</td></tr>
-      <tr><td>YouTube channel names</td><td>Pages you visit on youtube.com</td><td>Match citation sources in NotebookLM</td></tr>
-      <tr><td>Import preferences</td><td>User-configured settings</td><td>Remember your preferred import options</td></tr>
-      <tr><td>API key (optional, BYOK)</td><td>User-provided in settings</td><td>AI-powered summaries (if enabled by user)</td></tr>
+      <tr><td>YouTube URLs, titles, channel names, captions, and visible page metadata</td><td>YouTube pages where you use VideoLM</td><td>Import videos into NotebookLM, name notebooks, detect duplicates, and prepare optional AI processing</td></tr>
+      <tr><td>NotebookLM notebook/source/response content visible to the extension</td><td>NotebookLM pages where you use VideoLM</td><td>Import sources, detect existing sources, and export NotebookLM responses to Notion or Obsidian formats</td></tr>
+      <tr><td>Import preferences, duplicate cache, source index, and export settings</td><td>User settings and extension activity</td><td>Remember your settings and improve import/export reliability</td></tr>
+      <tr><td>License key, install id, entitlement token, plan, and quota usage</td><td>User settings and VideoLM backend</td><td>Validate Free/Pro access and enforce monthly quota in the official extension flow</td></tr>
+      <tr><td>Optional BYOK API key</td><td>User-provided in Settings</td><td>Call the AI provider selected by the user directly from the browser</td></tr>
     </table>
 
-    <p><strong>We do NOT collect:</strong> names, email addresses, browsing history, IP addresses, cookies, location data, financial information, or any other personally identifiable information (PII).</p>
+    <p>We do not intentionally collect names, email addresses, payment card data, location data, advertising identifiers, or unrelated browsing history.</p>
 
-    <!-- ====== 2. DATA PROCESSING ====== -->
-    <h2>2. How We Process Data</h2>
-    <p>All data processing happens <strong>entirely within your browser</strong> using Chrome's extension APIs. Specifically:</p>
+    <h2>2. Local Storage</h2>
+    <p>VideoLM stores the following data on your device using Chrome storage APIs:</p>
     <ul>
-      <li><strong>Video metadata extraction</strong> — When you click the import button on a YouTube page, the extension reads the video URL and title from the current page DOM. No data is scraped in the background.</li>
-      <li><strong>Duplicate detection</strong> — Video URLs are compared against a locally stored cache to prevent reimporting the same content.</li>
-      <li><strong>Citation source matching</strong> — Channel names and video titles are compared locally to resolve citation links within NotebookLM.</li>
-      <li><strong>AI summaries (optional, BYOK only)</strong> — If you provide your own API key (OpenAI or Anthropic), video metadata is sent directly from your browser to the AI provider you selected. VideoLM does not proxy, intercept, or store these API calls. Your API key is stored locally in Chrome's storage and is never transmitted to us.</li>
+      <li>Import preferences and export settings.</li>
+      <li>Duplicate detection cache and source index.</li>
+      <li>Temporary import session state.</li>
+      <li>Optional BYOK API key if you enter one.</li>
+      <li>License key, install id, entitlement token, plan, and mirrored quota usage.</li>
     </ul>
 
-    <!-- ====== 3. DATA STORAGE ====== -->
-    <h2>3. Data Storage</h2>
-    <p>VideoLM stores data exclusively on your device using Chrome's built-in storage APIs:</p>
+    <h2>3. Backend Communication</h2>
+    <p>VideoLM may communicate with the VideoLM backend for these limited purposes:</p>
+    <ul>
+      <li>Registering an extension install for entitlement and quota checks.</li>
+      <li>Validating a license key and refreshing Free/Pro plan status.</li>
+      <li>Reserving and refunding import quota for the official extension flow.</li>
+      <li>Providing optional bundled Pro AI processing, if enabled.</li>
+    </ul>
+    <p>The backend is not used for advertising, analytics, data brokerage, or unrelated user profiling.</p>
 
+    <h2>4. Third-Party Services</h2>
+    <p>The extension communicates with the following services only as needed for user-facing functionality:</p>
+    <ul>
+      <li><strong>youtube.com</strong>: read YouTube page metadata when you use VideoLM on YouTube.</li>
+      <li><strong>notebooklm.google.com</strong>: import sources into your NotebookLM notebooks and read visible NotebookLM content for export features.</li>
+      <li><strong>VideoLM backend</strong>: validate license, quota, entitlement, and optional bundled Pro AI features.</li>
+      <li><strong>OpenAI or Anthropic</strong>: only if you provide your own API key or use a bundled Pro AI feature that routes through the VideoLM backend.</li>
+    </ul>
+
+    <h2>5. Data Sharing</h2>
+    <p>VideoLM does not sell, rent, or transfer your data to advertisers, data brokers, or analytics providers.</p>
+    <p>Data is shared only when necessary to provide the extension features described above, comply with law, protect against abuse, or operate the service infrastructure.</p>
+
+    <h2>6. Retention and Deletion</h2>
+    <ul>
+      <li>Local settings and caches remain until you remove them, clear Chrome extension data, or uninstall VideoLM.</li>
+      <li>Session state is temporary and cleared by Chrome session storage.</li>
+      <li>License and quota records may remain on the backend while needed to provide entitlement, quota enforcement, fraud prevention, support, and legal compliance.</li>
+      <li>You may remove your BYOK API key from Settings at any time.</li>
+    </ul>
+
+    <h2>7. Permissions</h2>
     <table>
-      <tr><th>Data</th><th>Storage Method</th><th>Retention</th></tr>
-      <tr><td>Import preferences</td><td>chrome.storage.local</td><td>Until you uninstall the extension or clear data</td></tr>
-      <tr><td>Duplicate detection cache</td><td>chrome.storage.local</td><td>Automatically trimmed to most recent entries</td></tr>
-      <tr><td>Source index (citation matching)</td><td>chrome.storage.local</td><td>Automatically trimmed to most recent entries</td></tr>
-      <tr><td>Import session state</td><td>chrome.storage.session</td><td>Cleared when browser session ends</td></tr>
-      <tr><td>BYOK API key (if provided)</td><td>chrome.storage.local</td><td>Until you remove it or uninstall</td></tr>
+      <tr><th>Permission</th><th>Why It Is Needed</th></tr>
+      <tr><td>activeTab</td><td>Read the current YouTube page when you use the import feature.</td></tr>
+      <tr><td>storage</td><td>Store preferences, caches, license settings, and export options.</td></tr>
+      <tr><td>scripting</td><td>Inject the import and export UI on YouTube and NotebookLM pages.</td></tr>
+      <tr><td>notifications</td><td>Show completion or error notifications for long-running imports.</td></tr>
+      <tr><td>alarms</td><td>Keep the extension service worker alive during long-running batch imports.</td></tr>
+      <tr><td>Host access for YouTube and NotebookLM</td><td>Run the import/export features on the supported websites.</td></tr>
     </table>
 
-    <p><strong>No external databases, cloud storage, or remote servers are used.</strong> Uninstalling VideoLM removes all stored data.</p>
-
-    <!-- ====== 4. DATA SHARING ====== -->
-    <h2>4. Data Sharing</h2>
-    <p><strong>VideoLM does not share, sell, trade, or transfer your data to any third party.</strong></p>
-    <p>The extension communicates only with the following domains, solely to perform its core functionality at your explicit request:</p>
+    <h2>8. Security</h2>
     <ul>
-      <li><strong>youtube.com</strong> — To read video metadata from YouTube pages you visit (URLs, titles, channel names)</li>
-      <li><strong>notebooklm.google.com</strong> — To import video content into your Google NotebookLM notebooks</li>
-      <li><strong>api.openai.com or api.anthropic.com</strong> (optional, BYOK only) — Only if you provide your own API key and initiate an AI summary. These requests go directly from your browser to the provider; VideoLM does not intermediate.</li>
-    </ul>
-    <p>No data is sent to any analytics service, advertising network, data broker, or any server operated by VideoLM.</p>
-
-    <!-- ====== 5. DATA RETENTION & DELETION ====== -->
-    <h2>5. Data Retention and Deletion</h2>
-    <ul>
-      <li><strong>Session data</strong> (active import state) is automatically cleared when you close your browser.</li>
-      <li><strong>Local data</strong> (preferences, caches) persists until you uninstall the extension or manually clear extension data via <code>chrome://extensions</code>.</li>
-      <li><strong>BYOK API key</strong> can be removed at any time from the extension's Settings page.</li>
-      <li><strong>To delete all data:</strong> Uninstall VideoLM from Chrome. All locally stored data is immediately and permanently removed.</li>
+      <li>All network communication uses HTTPS.</li>
+      <li>BYOK API keys are stored in Chrome storage and are not sent to VideoLM unless you explicitly use a VideoLM-hosted AI feature that requires it. Current BYOK calls are made directly to the selected provider from your browser.</li>
+      <li>The extension does not execute remote code. Extension functionality is bundled in the package.</li>
+      <li>Source code is available at <a href="https://github.com/WXY395/VideoLM">github.com/WXY395/VideoLM</a>.</li>
     </ul>
 
-    <!-- ====== 6. PERMISSIONS ====== -->
-    <h2>6. Permissions Justification</h2>
-    <p>VideoLM requests only the minimum permissions required for its functionality:</p>
-    <table>
-      <tr><th>Permission</th><th>Why It's Needed</th></tr>
-      <tr><td><strong>activeTab</strong></td><td>Read the current YouTube page to extract video URLs and titles when you click the import button</td></tr>
-      <tr><td><strong>storage</strong></td><td>Save import preferences, duplicate detection cache, and source index locally on your device</td></tr>
-      <tr><td><strong>scripting</strong></td><td>Inject the import button UI on YouTube pages and the citation resolver on NotebookLM pages</td></tr>
-      <tr><td><strong>notifications</strong></td><td>Show a desktop notification when a batch import completes</td></tr>
-      <tr><td><strong>alarms</strong></td><td>Keep the background service worker alive during long-running batch imports (Chrome terminates idle workers after 30 seconds)</td></tr>
-      <tr><td><strong>Host access</strong><br>(youtube.com, notebooklm.google.com)</td><td>Required to run content scripts on YouTube (extract metadata) and NotebookLM (automate import and resolve citations)</td></tr>
-    </table>
+    <h2>9. Children</h2>
+    <p>VideoLM is not directed at children under 13, and we do not knowingly collect personal information from children.</p>
 
-    <!-- ====== 7. SECURITY ====== -->
-    <h2>7. Security</h2>
-    <ul>
-      <li>All communication with youtube.com and notebooklm.google.com occurs over HTTPS.</li>
-      <li>BYOK API keys are stored in Chrome's encrypted local storage and are never logged, transmitted to us, or exposed to web pages.</li>
-      <li>The extension does not execute any remote code. All functionality is bundled within the extension package.</li>
-      <li>Source code is publicly available at <a href="https://github.com/WXY395/VideoLM">github.com/WXY395/VideoLM</a>.</li>
-    </ul>
+    <h2>10. Changes</h2>
+    <p>If this policy changes materially, the "Last updated" date will be updated. Continued use of VideoLM after changes means you accept the updated policy.</p>
 
-    <!-- ====== 8. CHILDREN ====== -->
-    <h2>8. Children's Privacy</h2>
-    <p>VideoLM is not directed at children under the age of 13. We do not knowingly collect any personal information from children.</p>
-
-    <!-- ====== 9. CHANGES ====== -->
-    <h2>9. Changes to This Policy</h2>
-    <p>If we make material changes to this privacy policy, we will update the "Last updated" date at the top of this page. Continued use of the extension after changes constitutes acceptance of the updated policy.</p>
-
-    <!-- ====== 10. CONTACT ====== -->
-    <h2>10. Contact</h2>
-    <p>If you have questions or concerns about this privacy policy or VideoLM's data practices, contact us at:</p>
-    <p><strong>Email:</strong> <a href="mailto:support@videolm.dev">support@videolm.dev</a></p>
+    <h2>11. Contact</h2>
+    <p>For privacy questions, contact <a href="mailto:support@videolm.dev">support@videolm.dev</a>.</p>
 
     <div class="footer">
       &copy; 2026 VideoLM. All rights reserved.

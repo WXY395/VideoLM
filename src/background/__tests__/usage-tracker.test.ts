@@ -29,7 +29,17 @@ const chromeMock = {
 (globalThis as any).chrome = chromeMock;
 
 // Dynamic import so chrome mock is in place first
-const { getSettings, saveSettings, incrementUsage, checkQuota, STORAGE_KEY, defaultSettings } =
+const {
+  getSettings,
+  saveSettings,
+  saveUserPreferences,
+  incrementUsage,
+  reserveImportQuota,
+  refundImportQuota,
+  checkQuota,
+  STORAGE_KEY,
+  defaultSettings,
+} =
   await import('../usage-tracker');
 
 // ---------------------------------------------------------------------------
@@ -106,6 +116,66 @@ describe('usage-tracker', () => {
     });
   });
 
+  // ---- saveUserPreferences -----------------------------------------------
+  describe('saveUserPreferences', () => {
+    it('does not allow preference saves to overwrite tier or monthly usage', async () => {
+      storageData[STORAGE_KEY] = makeSettings({
+        tier: 'pro',
+        defaultMode: 'raw',
+        monthlyUsage: { imports: 42, aiCalls: 7, resetDate: '2099-01-01' },
+      });
+
+      await saveUserPreferences(makeSettings({
+        tier: 'free',
+        defaultMode: 'summary',
+        monthlyUsage: { imports: 0, aiCalls: 0, resetDate: '2099-01-01' },
+      }));
+
+      const updated = storageData[STORAGE_KEY] as UserSettings;
+      expect(updated.tier).toBe('pro');
+      expect(updated.defaultMode).toBe('summary');
+      expect(updated.monthlyUsage.imports).toBe(42);
+      expect(updated.monthlyUsage.aiCalls).toBe(7);
+    });
+
+    it('preserves server-owned entitlement fields while saving editable license fields', async () => {
+      storageData[STORAGE_KEY] = makeSettings({
+        tier: 'pro',
+        entitlement: {
+          backendUrl: 'https://api.old',
+          installId: 'install-1',
+          authToken: 'server-token',
+          licenseKey: 'OLD-LICENSE',
+          snapshot: {
+            subjectId: 'license:abc',
+            plan: 'pro',
+            periodStart: '2099-01-01',
+            periodEnd: '2099-02-01',
+            limits: { imports: null, aiCalls: null },
+            usage: { imports: 12, aiCalls: 3 },
+          },
+          lastSyncedAt: 123,
+        },
+      });
+
+      await saveUserPreferences({
+        entitlement: {
+          backendUrl: 'https://api.new',
+          licenseKey: 'NEW-LICENSE',
+        } as any,
+      });
+
+      const updated = storageData[STORAGE_KEY] as UserSettings;
+      expect(updated.entitlement?.backendUrl).toBe('https://api.new');
+      expect(updated.entitlement?.licenseKey).toBe('NEW-LICENSE');
+      expect(updated.entitlement?.installId).toBe('install-1');
+      expect(updated.entitlement?.authToken).toBe('server-token');
+      expect(updated.entitlement?.snapshot?.plan).toBe('pro');
+      expect(updated.entitlement?.lastSyncedAt).toBe(123);
+      expect(updated.tier).toBe('pro');
+    });
+  });
+
   // ---- incrementUsage -----------------------------------------------------
   describe('incrementUsage', () => {
     it('increments imports counter', async () => {
@@ -124,6 +194,47 @@ describe('usage-tracker', () => {
       await incrementUsage('aiCalls');
       const updated = storageData[STORAGE_KEY] as UserSettings;
       expect(updated.monthlyUsage.aiCalls).toBe(1);
+    });
+  });
+
+  // ---- reserveImportQuota / refundImportQuota ----------------------------
+  describe('reserveImportQuota', () => {
+    it('reserves multiple imports atomically before a direct NLM import', async () => {
+      storageData[STORAGE_KEY] = makeSettings({
+        monthlyUsage: { imports: 98, aiCalls: 0, resetDate: '2099-01-01' },
+      });
+
+      const result = await reserveImportQuota(2);
+
+      expect(result.allowed).toBe(true);
+      const updated = storageData[STORAGE_KEY] as UserSettings;
+      expect(updated.monthlyUsage.imports).toBe(100);
+    });
+
+    it('blocks reservations that would exceed the monthly import limit', async () => {
+      storageData[STORAGE_KEY] = makeSettings({
+        monthlyUsage: { imports: 99, aiCalls: 0, resetDate: '2099-01-01' },
+      });
+
+      const result = await reserveImportQuota(2);
+
+      expect(result.allowed).toBe(false);
+      expect(result.remaining).toBe(1);
+      const updated = storageData[STORAGE_KEY] as UserSettings;
+      expect(updated.monthlyUsage.imports).toBe(99);
+    });
+  });
+
+  describe('refundImportQuota', () => {
+    it('refunds reserved imports without going below zero', async () => {
+      storageData[STORAGE_KEY] = makeSettings({
+        monthlyUsage: { imports: 3, aiCalls: 0, resetDate: '2099-01-01' },
+      });
+
+      await refundImportQuota(5);
+
+      const updated = storageData[STORAGE_KEY] as UserSettings;
+      expect(updated.monthlyUsage.imports).toBe(0);
     });
   });
 

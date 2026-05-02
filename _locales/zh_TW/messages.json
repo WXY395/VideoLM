@@ -227,6 +227,24 @@
   "dup_skip": { "message": "略過" },
 
   "settings_title": { "message": "設定" },
+  "settings_entitlement_title": { "message": "方案與配額" },
+  "settings_entitlement_plan": { "message": "方案" },
+  "settings_entitlement_plan_value": {
+    "message": "$PLAN$",
+    "placeholders": { "plan": { "content": "$1", "example": "PRO" } }
+  },
+  "settings_entitlement_import_usage": { "message": "匯入" },
+  "settings_entitlement_import_usage_value": {
+    "message": "$USAGE$",
+    "placeholders": { "usage": { "content": "$1", "example": "23/100" } }
+  },
+  "settings_entitlement_unlimited": { "message": "無上限" },
+  "settings_license_key": { "message": "授權金鑰" },
+  "settings_backend_url": { "message": "Backend URL" },
+  "settings_backend_url_help": { "message": "一般情況請保留預設值；只有自行部署測試後端時才需要修改。" },
+  "settings_refresh_entitlement": { "message": "重新整理方案" },
+  "settings_entitlement_refreshed": { "message": "方案已更新。" },
+  "settings_entitlement_refresh_failed": { "message": "無法更新方案，請檢查授權金鑰或 Backend URL。" },
   "settings_provider": { "message": "AI 提供者" },
   "settings_provider_openai": { "message": "OpenAI" },
   "settings_provider_anthropic": { "message": "Anthropic" },

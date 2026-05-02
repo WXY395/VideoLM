@@ -379,8 +379,21 @@ body {
   margin: 0 0 16px;
 }
 
+.settings-subtitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: #202124;
+  margin: 0 0 10px;
+}
+
 .settings-section {
   margin-bottom: 14px;
+}
+
+.settings-section--divider {
+  border-top: 1px solid #e8eaed;
+  padding-top: 14px;
+  margin-top: 16px;
 }
 
 .settings-label {
@@ -417,6 +430,55 @@ body {
   margin-bottom: 16px;
 }
 
+.settings-help {
+  font-size: 11px;
+  color: #5f6368;
+  margin: 6px 0 0;
+  line-height: 1.4;
+}
+
+.settings-section--entitlement {
+  background: #f8fafd;
+  border: 1px solid #e8eaed;
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.settings-entitlement-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.settings-entitlement-grid strong {
+  display: block;
+  font-size: 13px;
+  color: #202124;
+  margin-top: 2px;
+}
+
+.settings-kicker {
+  display: block;
+  font-size: 10px;
+  color: #5f6368;
+  text-transform: uppercase;
+}
+
+.settings-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #3c4043;
+  margin: 8px 0;
+  cursor: pointer;
+}
+
+.settings-checkbox input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+}
+
 .save-button {
   width: 100%;
   padding: 10px 16px;
@@ -432,6 +494,27 @@ body {
 
 .save-button:hover {
   background: #1765cc;
+}
+
+.secondary-button {
+  width: 100%;
+  padding: 8px 12px;
+  background: #fff;
+  color: #1a73e8;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.secondary-button:hover:not(:disabled) {
+  background: #f8fafd;
+}
+
+.secondary-button:disabled {
+  color: #9aa0a6;
+  cursor: not-allowed;
 }
 
 /* Quick Import URL preview */

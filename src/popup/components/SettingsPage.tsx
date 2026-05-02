@@ -5,6 +5,7 @@ import { t } from '@/utils/i18n';
 interface SettingsPageProps {
   settings: UserSettings;
   onSave: (partial: Partial<UserSettings>) => void;
+  onRefreshEntitlement: () => Promise<{ success: boolean; error?: string }> | void;
   onBack: () => void;
 }
 
@@ -13,7 +14,7 @@ const DEFAULT_MODELS: Record<string, string> = {
   anthropic: 'claude-sonnet-4-20250514',
 };
 
-export function SettingsPage({ settings, onSave, onBack }: SettingsPageProps) {
+export function SettingsPage({ settings, onSave, onRefreshEntitlement, onBack }: SettingsPageProps) {
   const [provider, setProvider] = useState<AIProviderType>(
     settings.byok?.provider ?? 'openai'
   );
@@ -25,7 +26,34 @@ export function SettingsPage({ settings, onSave, onBack }: SettingsPageProps) {
   const [outputLanguage, setOutputLanguage] = useState<string>(
     settings.outputLanguage ?? 'auto'
   );
+  const [obsidianFileNameTemplate, setObsidianFileNameTemplate] = useState(
+    settings.obsidian?.fileNameTemplate ?? '{{title}} - {{date}}'
+  );
+  const [obsidianTags, setObsidianTags] = useState(
+    (settings.obsidian?.defaultTags ?? ['videolm', 'notebooklm']).join(', ')
+  );
+  const [obsidianIncludeEvidenceMap, setObsidianIncludeEvidenceMap] = useState(
+    settings.obsidian?.includeEvidenceMap ?? true
+  );
+  const [obsidianIncludeFollowups, setObsidianIncludeFollowups] = useState(
+    settings.obsidian?.includeFollowups ?? true
+  );
+  const [obsidianIncludeSources, setObsidianIncludeSources] = useState(
+    settings.obsidian?.includeSources ?? true
+  );
+  const [licenseKey, setLicenseKey] = useState(settings.entitlement?.licenseKey ?? '');
+  const [backendUrl, setBackendUrl] = useState(settings.entitlement?.backendUrl ?? '');
+  const [refreshingEntitlement, setRefreshingEntitlement] = useState(false);
+  const [entitlementMessage, setEntitlementMessage] = useState('');
   const [saved, setSaved] = useState(false);
+
+  const entitlement = settings.entitlement?.snapshot;
+  const plan = entitlement?.plan ?? settings.tier;
+  const importLimit = entitlement?.limits.imports;
+  const importUsed = entitlement?.usage.imports ?? settings.monthlyUsage.imports;
+  const importUsageText = importLimit === null
+    ? t('settings_entitlement_unlimited')
+    : `${importUsed}/${importLimit ?? 100}`;
 
   const handleSave = () => {
     const byok: BYOKConfig | undefined = apiKey.trim()
@@ -36,9 +64,39 @@ export function SettingsPage({ settings, onSave, onBack }: SettingsPageProps) {
         }
       : undefined;
 
-    onSave({ byok, duplicateStrategy: dupStrategy, outputLanguage });
+    const defaultTags = obsidianTags
+      .split(',')
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+
+    onSave({
+      byok,
+      duplicateStrategy: dupStrategy,
+      outputLanguage,
+      obsidian: {
+        fileNameTemplate: obsidianFileNameTemplate.trim() || '{{title}} - {{date}}',
+        defaultTags: defaultTags.length ? defaultTags : ['videolm', 'notebooklm'],
+        includeEvidenceMap: obsidianIncludeEvidenceMap,
+        includeFollowups: obsidianIncludeFollowups,
+        includeSources: obsidianIncludeSources,
+        citationStyle: 'footnotes',
+      },
+      entitlement: {
+        backendUrl: backendUrl.trim() || settings.entitlement?.backendUrl || '',
+        licenseKey: licenseKey.trim() || undefined,
+      },
+    });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  const handleRefreshEntitlement = async () => {
+    setRefreshingEntitlement(true);
+    setEntitlementMessage('');
+    const result = await Promise.resolve(onRefreshEntitlement?.());
+    setRefreshingEntitlement(false);
+    const success = typeof result === 'object' && Boolean(result?.success);
+    setEntitlementMessage(success ? t('settings_entitlement_refreshed') : t('settings_entitlement_refresh_failed'));
   };
 
   return (
@@ -48,6 +106,58 @@ export function SettingsPage({ settings, onSave, onBack }: SettingsPageProps) {
       </button>
 
       <h2 className="settings-title">{t('settings_title')}</h2>
+
+      <div className="settings-section settings-section--entitlement">
+        <h3 className="settings-subtitle">{t('settings_entitlement_title')}</h3>
+        <div className="settings-entitlement-grid">
+          <div>
+            <span className="settings-kicker">{t('settings_entitlement_plan')}</span>
+            <strong>{t('settings_entitlement_plan_value', [plan.toUpperCase()])}</strong>
+          </div>
+          <div>
+            <span className="settings-kicker">{t('settings_entitlement_import_usage')}</span>
+            <strong>{t('settings_entitlement_import_usage_value', [importUsageText])}</strong>
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <label className="settings-label" htmlFor="license-key-input">
+          {t('settings_license_key')}
+        </label>
+        <input
+          id="license-key-input"
+          type="text"
+          value={licenseKey}
+          onChange={(e) => setLicenseKey(e.target.value)}
+          placeholder="VL-..."
+        />
+      </div>
+
+      <div className="settings-section">
+        <label className="settings-label" htmlFor="backend-url-input">
+          {t('settings_backend_url')}
+        </label>
+        <input
+          id="backend-url-input"
+          type="text"
+          value={backendUrl}
+          onChange={(e) => setBackendUrl(e.target.value)}
+          placeholder="https://api.videolm.workers.dev"
+        />
+        <p className="settings-help">{t('settings_backend_url_help')}</p>
+      </div>
+
+      <div className="settings-section">
+        <button
+          className="secondary-button"
+          onClick={handleRefreshEntitlement}
+          disabled={refreshingEntitlement}
+        >
+          {refreshingEntitlement ? t('common_processing') : t('settings_refresh_entitlement')}
+        </button>
+        {entitlementMessage && <p className="settings-help">{entitlementMessage}</p>}
+      </div>
 
       <div className="settings-section">
         <label className="settings-label" htmlFor="provider-select">
@@ -148,6 +258,62 @@ export function SettingsPage({ settings, onSave, onBack }: SettingsPageProps) {
       <p className="settings-hint">
         {t('settings_api_hint')}
       </p>
+
+      <div className="settings-section settings-section--divider">
+        <h3 className="settings-subtitle">Obsidian</h3>
+        <label className="settings-label" htmlFor="obsidian-filename-template">
+          檔名模板 File name template
+        </label>
+        <input
+          id="obsidian-filename-template"
+          type="text"
+          value={obsidianFileNameTemplate}
+          onChange={(e) => setObsidianFileNameTemplate(e.target.value)}
+          placeholder="{{title}} - {{date}}"
+        />
+        <p className="settings-help">Supports {'{{title}}'}, {'{{notebook_title}}'}, and {'{{date}}'}.</p>
+      </div>
+
+      <div className="settings-section">
+        <label className="settings-label" htmlFor="obsidian-tags">
+          預設標籤 Default tags
+        </label>
+        <input
+          id="obsidian-tags"
+          type="text"
+          value={obsidianTags}
+          onChange={(e) => setObsidianTags(e.target.value)}
+          placeholder="videolm, notebooklm"
+        />
+      </div>
+
+      <div className="settings-section">
+        <label className="settings-label">筆記區塊 Sections</label>
+        <label className="settings-checkbox">
+          <input
+            type="checkbox"
+            checked={obsidianIncludeEvidenceMap}
+            onChange={(e) => setObsidianIncludeEvidenceMap(e.target.checked)}
+          />
+          <span>包含來源對照表 Evidence Map</span>
+        </label>
+        <label className="settings-checkbox">
+          <input
+            type="checkbox"
+            checked={obsidianIncludeFollowups}
+            onChange={(e) => setObsidianIncludeFollowups(e.target.checked)}
+          />
+          <span>包含後續行動 Follow-ups</span>
+        </label>
+        <label className="settings-checkbox">
+          <input
+            type="checkbox"
+            checked={obsidianIncludeSources}
+            onChange={(e) => setObsidianIncludeSources(e.target.checked)}
+          />
+          <span>包含來源註腳 Sources</span>
+        </label>
+      </div>
 
       <button className="save-button" onClick={handleSave}>
         {saved ? t('settings_saved') : t('settings_save')}

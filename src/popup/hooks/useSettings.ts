@@ -4,6 +4,7 @@ import type { UserSettings } from '@/types';
 interface UseSettingsResult {
   settings: UserSettings | null;
   updateSettings: (partial: Partial<UserSettings>) => void;
+  refreshEntitlement: () => Promise<{ success: boolean; error?: string }>;
 }
 
 /**
@@ -36,5 +37,22 @@ export function useSettings(): UseSettingsResult {
     [settings]
   );
 
-  return { settings, updateSettings };
+  const refreshEntitlement = useCallback(() => {
+    return new Promise<{ success: boolean; error?: string }>((resolve) => {
+      chrome.runtime.sendMessage({ type: 'REFRESH_ENTITLEMENT' }, (response) => {
+        if (chrome.runtime.lastError) {
+          resolve({ success: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+        if (response?.success && response.settings) {
+          setSettings(response.settings);
+          resolve({ success: true });
+          return;
+        }
+        resolve({ success: false, error: response?.error || 'refresh_failed' });
+      });
+    });
+  }, []);
+
+  return { settings, updateSettings, refreshEntitlement };
 }

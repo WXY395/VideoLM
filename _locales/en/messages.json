@@ -373,6 +373,24 @@
   "dup_skip": { "message": "Skip" },
 
   "settings_title": { "message": "Settings" },
+  "settings_entitlement_title": { "message": "Plan & quota" },
+  "settings_entitlement_plan": { "message": "Plan" },
+  "settings_entitlement_plan_value": {
+    "message": "$PLAN$",
+    "placeholders": { "plan": { "content": "$1", "example": "PRO" } }
+  },
+  "settings_entitlement_import_usage": { "message": "Imports" },
+  "settings_entitlement_import_usage_value": {
+    "message": "$USAGE$",
+    "placeholders": { "usage": { "content": "$1", "example": "23/100" } }
+  },
+  "settings_entitlement_unlimited": { "message": "Unlimited" },
+  "settings_license_key": { "message": "License Key" },
+  "settings_backend_url": { "message": "Backend URL" },
+  "settings_backend_url_help": { "message": "Keep the default value unless you are using your own test backend." },
+  "settings_refresh_entitlement": { "message": "Refresh Plan" },
+  "settings_entitlement_refreshed": { "message": "Plan refreshed." },
+  "settings_entitlement_refresh_failed": { "message": "Could not refresh plan. Check the license key or backend URL." },
   "settings_provider": { "message": "AI Provider" },
   "settings_provider_openai": { "message": "OpenAI" },
   "settings_provider_anthropic": { "message": "Anthropic" },

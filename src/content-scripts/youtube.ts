@@ -144,21 +144,73 @@ function createNlmButton(id: string, label: string): HTMLButtonElement {
   return btn;
 }
 
+function isVisibleInjectionTarget(el: Element): boolean {
+  if (el.closest('[hidden], [aria-hidden="true"]')) return false;
+  const style = window.getComputedStyle(el);
+  if (style.display === 'none' || style.visibility === 'hidden') return false;
+  return true;
+}
+
+function queryFirstVisible(candidates: string | readonly string[]): Element | null {
+  const selectors = Array.isArray(candidates) ? candidates : [candidates];
+  for (const selector of selectors) {
+    const matches = document.querySelectorAll(selector);
+    for (const match of matches) {
+      if (isVisibleInjectionTarget(match)) return match;
+    }
+  }
+  return null;
+}
+
+function findVideoButtonContainer(): Element | null {
+  const ownerContainer = queryFirstVisible(YT.INJECT.VIDEO);
+  if (ownerContainer) return ownerContainer;
+
+  const subscribeTarget = queryFirstVisible([
+    'ytd-watch-metadata #subscribe-button',
+    'ytd-watch-metadata ytd-subscribe-button-renderer',
+    'ytd-watch-metadata button[aria-label*="訂閱"]',
+    'ytd-watch-metadata button[aria-label*="Subscribe" i]',
+  ]);
+  if (!subscribeTarget) return null;
+
+  const subscribeContainer =
+    subscribeTarget.id === 'subscribe-button'
+      ? subscribeTarget
+      : subscribeTarget.closest('#subscribe-button, ytd-subscribe-button-renderer') ?? subscribeTarget;
+
+  const parent = subscribeContainer.parentElement;
+  if (parent && isVisibleInjectionTarget(parent)) return parent;
+
+  return subscribeContainer;
+}
+
+function hasUsableVideoButton(): boolean {
+  const btn = document.getElementById(BUTTON_ID_VIDEO);
+  if (!btn) return false;
+
+  const ownerContainer = findVideoButtonContainer();
+  return !!ownerContainer && ownerContainer.contains(btn) && isVisibleInjectionTarget(btn);
+}
+
 // ---------------------------------------------------------------------------
 // Video page button (next to Like / Share / Save)
 // ---------------------------------------------------------------------------
 function injectVideoButton(): void {
-  // Already injected
-  if (document.getElementById(BUTTON_ID_VIDEO)) return;
-
   // Not a watch page
   if (!location.pathname.startsWith('/watch')) return;
 
   // Inject into #owner row (channel name + subscribe area).
   // This container is STABLE across SPA navigations — YouTube updates it
   // in-place rather than replacing the entire subtree like #actions.
-  const ownerContainer = queryFirst(YT.INJECT.VIDEO);
+  const ownerContainer = findVideoButtonContainer();
   if (!ownerContainer) return;
+
+  const existingButton = document.getElementById(BUTTON_ID_VIDEO);
+  if (existingButton) {
+    if (ownerContainer.contains(existingButton) && isVisibleInjectionTarget(existingButton)) return;
+    existingButton.remove();
+  }
 
   const btn = createNlmButton(BUTTON_ID_VIDEO, t('btn_notebooklm'));
 
@@ -542,7 +594,7 @@ const observer = new MutationObserver(() => {
   // Try to inject if button is missing on this page type
   const path = location.pathname;
 
-  if (path.startsWith('/watch') && !document.getElementById(BUTTON_ID_VIDEO)) {
+  if (path.startsWith('/watch') && !hasUsableVideoButton()) {
     injectVideoButton();
   } else if (
     (/^\/@[^/]+/.test(path) || path.startsWith('/channel/')) &&
@@ -572,7 +624,7 @@ function tryInjectWithRetry(retriesLeft = 5): void {
   tryInjectButtons();
   const path = location.pathname;
   const needsRetry =
-    (path.startsWith('/watch') && !document.getElementById(BUTTON_ID_VIDEO)) ||
+    (path.startsWith('/watch') && !hasUsableVideoButton()) ||
     ((/^\/@[^/]+/.test(path) || path.startsWith('/channel/')) && !document.getElementById(BUTTON_ID_CHANNEL)) ||
     (path.startsWith('/playlist') && !document.getElementById(BUTTON_ID_PLAYLIST)) ||
     (path.startsWith('/results') && !document.getElementById(BUTTON_ID_SEARCH));
@@ -615,7 +667,7 @@ const heartbeatId = setInterval(() => {
     removeAllButtons();
   }
 
-  if (path.startsWith('/watch') && !document.getElementById(BUTTON_ID_VIDEO)) {
+  if (path.startsWith('/watch') && !hasUsableVideoButton()) {
     injectVideoButton();
   }
   if ((/^\/@[^/]+/.test(path) || path.startsWith('/channel/')) && !document.getElementById(BUTTON_ID_CHANNEL)) {

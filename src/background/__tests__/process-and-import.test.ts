@@ -155,6 +155,83 @@ describe('processAndImport', () => {
       expect(deps.incrementUsage).toHaveBeenCalledWith('aiCalls');
       expect(deps.incrementUsage).toHaveBeenCalledWith('imports');
     });
+
+    it('fails AI modes when quota allows AI but no provider is wired', async () => {
+      const provider = makeMockProvider({ name: 'no-ai' });
+      const deps = makeDefaultDeps(provider);
+
+      const result = await processAndImport(SAMPLE_VIDEO, { mode: 'summary' }, deps);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('error_ai_requires_key');
+      expect(provider.summarize).not.toHaveBeenCalled();
+      expect(deps.incrementUsage).not.toHaveBeenCalled();
+    });
+
+    it('refunds reserved import quota when AI quota is denied after import reservation', async () => {
+      const provider = makeMockProvider();
+      const deps = makeDefaultDeps(provider);
+      deps.getSettings = vi.fn(async (): Promise<UserSettings> => ({
+        tier: 'pro',
+        defaultMode: 'summary',
+        duplicateStrategy: 'ask',
+        entitlement: {
+          backendUrl: 'https://api.test',
+          installId: 'install-1',
+          authToken: 'token',
+        },
+        monthlyUsage: { imports: 0, aiCalls: 0, resetDate: '2099-01-01' },
+      }));
+      deps.reserveUsage = vi.fn(async (key) => key === 'imports'
+        ? { allowed: true, reservationId: 'import-res' }
+        : { allowed: false, error: 'quota_exceeded' });
+      deps.refundUsage = vi.fn(async () => {});
+
+      const result = await processAndImport(SAMPLE_VIDEO, { mode: 'summary' }, deps);
+
+      expect(result.success).toBe(false);
+      expect(deps.refundUsage).toHaveBeenCalledWith('imports', 'import-res');
+      expect(provider.summarize).not.toHaveBeenCalled();
+    });
+
+    it('refunds reserved import quota when local AI eligibility fails', async () => {
+      const provider = makeMockProvider();
+      const deps = makeDefaultDeps(provider);
+      deps.getSettings = vi.fn(async (): Promise<UserSettings> => ({
+        tier: 'free',
+        defaultMode: 'summary',
+        duplicateStrategy: 'ask',
+        monthlyUsage: { imports: 0, aiCalls: 0, resetDate: '2099-01-01' },
+      }));
+      deps.checkQuota = vi.fn(() => ({ canImport: true, canUseAI: false }));
+      deps.reserveUsage = vi.fn(async () => ({ allowed: true, reservationId: 'import-res' }));
+      deps.refundUsage = vi.fn(async () => {});
+
+      const result = await processAndImport(SAMPLE_VIDEO, { mode: 'summary' }, deps);
+
+      expect(result.success).toBe(false);
+      expect(deps.refundUsage).toHaveBeenCalledWith('imports', 'import-res');
+      expect(provider.summarize).not.toHaveBeenCalled();
+    });
+
+    it('refunds reserved import quota when builtin provider is not wired', async () => {
+      const provider = makeMockProvider({ name: 'no-ai' });
+      const deps = makeDefaultDeps(provider);
+      deps.getSettings = vi.fn(async (): Promise<UserSettings> => ({
+        tier: 'pro',
+        defaultMode: 'summary',
+        duplicateStrategy: 'ask',
+        monthlyUsage: { imports: 0, aiCalls: 0, resetDate: '2099-01-01' },
+      }));
+      deps.reserveUsage = vi.fn(async () => ({ allowed: true, reservationId: 'import-res' }));
+      deps.refundUsage = vi.fn(async () => {});
+
+      const result = await processAndImport(SAMPLE_VIDEO, { mode: 'summary' }, deps);
+
+      expect(result.success).toBe(false);
+      expect(deps.refundUsage).toHaveBeenCalledWith('imports', 'import-res');
+      expect(provider.summarize).not.toHaveBeenCalled();
+    });
   });
 
   describe("mode: 'structured'", () => {
