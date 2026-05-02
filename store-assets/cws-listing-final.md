@@ -1,7 +1,7 @@
 # VideoLM - Chrome Web Store Listing
 
 > Draft updated for server entitlement/quota and Pro readiness.
-> Current repo version: v0.3.1. Consider publishing the next CWS package as v0.4.0 after final release approval.
+> Current release package: v0.4.0.
 
 ---
 
