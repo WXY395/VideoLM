@@ -260,6 +260,7 @@ export type MessageType =
   | { type: 'OBSIDIAN_SETTINGS'; data?: ObsidianExportSettings }
   | { type: 'SAVE_SETTINGS'; settings: UserSettings }
   | { type: 'REFRESH_ENTITLEMENT' }
+  | { type: 'GET_DIAGNOSTICS_BUNDLE'; pageType?: string }
   | { type: 'PROCESS_AND_IMPORT'; videoContent: VideoContent; options: ImportOptions }
   | { type: 'QUICK_IMPORT'; videoUrl: string | string[]; videoTitle?: string }
   | { type: 'CHECK_DUPLICATE'; videoId: string; videoTitle: string }

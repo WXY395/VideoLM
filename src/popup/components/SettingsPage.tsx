@@ -6,6 +6,8 @@ interface SettingsPageProps {
   settings: UserSettings;
   onSave: (partial: Partial<UserSettings>) => void;
   onRefreshEntitlement: () => Promise<{ success: boolean; error?: string }> | void;
+  onCopyDiagnostics: () => Promise<{ success: boolean; error?: string }> | void;
+  onReportIssue: () => Promise<{ success: boolean; error?: string }> | void;
   onBack: () => void;
 }
 
@@ -14,7 +16,14 @@ const DEFAULT_MODELS: Record<string, string> = {
   anthropic: 'claude-sonnet-4-20250514',
 };
 
-export function SettingsPage({ settings, onSave, onRefreshEntitlement, onBack }: SettingsPageProps) {
+export function SettingsPage({
+  settings,
+  onSave,
+  onRefreshEntitlement,
+  onCopyDiagnostics,
+  onReportIssue,
+  onBack,
+}: SettingsPageProps) {
   const [provider, setProvider] = useState<AIProviderType>(
     settings.byok?.provider ?? 'openai'
   );
@@ -45,6 +54,10 @@ export function SettingsPage({ settings, onSave, onRefreshEntitlement, onBack }:
   const [backendUrl, setBackendUrl] = useState(settings.entitlement?.backendUrl ?? '');
   const [refreshingEntitlement, setRefreshingEntitlement] = useState(false);
   const [entitlementMessage, setEntitlementMessage] = useState('');
+  const [copyingDiagnostics, setCopyingDiagnostics] = useState(false);
+  const [diagnosticsMessage, setDiagnosticsMessage] = useState('');
+  const [reportingIssue, setReportingIssue] = useState(false);
+  const [reportIssueMessage, setReportIssueMessage] = useState('');
   const [saved, setSaved] = useState(false);
 
   const entitlement = settings.entitlement?.snapshot;
@@ -97,6 +110,24 @@ export function SettingsPage({ settings, onSave, onRefreshEntitlement, onBack }:
     setRefreshingEntitlement(false);
     const success = typeof result === 'object' && Boolean(result?.success);
     setEntitlementMessage(success ? t('settings_entitlement_refreshed') : t('settings_entitlement_refresh_failed'));
+  };
+
+  const handleCopyDiagnostics = async () => {
+    setCopyingDiagnostics(true);
+    setDiagnosticsMessage('');
+    const result = await Promise.resolve(onCopyDiagnostics?.());
+    setCopyingDiagnostics(false);
+    const success = typeof result === 'object' && Boolean(result?.success);
+    setDiagnosticsMessage(success ? t('settings_diagnostics_copied') : t('settings_diagnostics_failed'));
+  };
+
+  const handleReportIssue = async () => {
+    setReportingIssue(true);
+    setReportIssueMessage('');
+    const result = await Promise.resolve(onReportIssue?.());
+    setReportingIssue(false);
+    const success = typeof result === 'object' && Boolean(result?.success);
+    setReportIssueMessage(success ? t('settings_report_issue_opened') : t('settings_report_issue_failed'));
   };
 
   return (
@@ -258,6 +289,29 @@ export function SettingsPage({ settings, onSave, onRefreshEntitlement, onBack }:
       <p className="settings-hint">
         {t('settings_api_hint')}
       </p>
+
+      <div className="settings-section settings-section--divider">
+        <h3 className="settings-subtitle">{t('settings_support_title')}</h3>
+        <div className="settings-support-actions">
+          <button
+            className="secondary-button"
+            onClick={handleCopyDiagnostics}
+            disabled={copyingDiagnostics}
+          >
+            {copyingDiagnostics ? t('common_processing') : t('settings_copy_diagnostics')}
+          </button>
+          <button
+            className="secondary-button"
+            onClick={handleReportIssue}
+            disabled={reportingIssue}
+          >
+            {reportingIssue ? t('common_processing') : t('settings_report_issue')}
+          </button>
+        </div>
+        <p className="settings-help">{t('settings_diagnostics_help')}</p>
+        {diagnosticsMessage && <p className="settings-help">{diagnosticsMessage}</p>}
+        {reportIssueMessage && <p className="settings-help">{reportIssueMessage}</p>}
+      </div>
 
       <div className="settings-section settings-section--divider">
         <h3 className="settings-subtitle">Obsidian</h3>

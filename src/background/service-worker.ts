@@ -39,6 +39,7 @@ import { deduplicateAgainstCache, addToDedupCache, removeFromDedupCache } from '
 import { YT, NLM } from '@/config/selectors';
 import { notionExport } from '@/utils/notion-sync';
 import { createVideoSourceRecord } from '@/utils/source-resolution';
+import { buildDiagnosticsBundle, formatDiagnosticsBundle } from '@/utils/diagnostics';
 import { upsertSourceRecord, loadSourceIndex } from './source-store';
 // dedup-cache is GLOBAL (not per-notebook) — always catches duplicates regardless of notebook matching
 
@@ -128,6 +129,22 @@ function defaultProcessDeps() {
     resolveProvider,
     t,
   };
+}
+
+function inferPageTypeFromUrl(url?: string): string {
+  if (!url) return 'unknown';
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname.includes('notebooklm.google.com')) return parsed.pathname.includes('/notebook/') ? 'notebooklm-notebook' : 'notebooklm-home';
+    if (!parsed.hostname.includes('youtube.com')) return 'unsupported';
+    if (parsed.pathname === '/watch') return 'watch';
+    if (parsed.pathname === '/playlist') return 'playlist';
+    if (parsed.pathname === '/results') return 'search';
+    if (parsed.pathname.startsWith('/@') || parsed.pathname.includes('/channel/')) return 'channel';
+    return 'youtube';
+  } catch {
+    return 'unknown';
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1237,6 +1254,41 @@ chrome.runtime.onMessage.addListener(
             const entitlement = await reRegisterServerEntitlement();
             const settings = await getSettings();
             sendResponse({ success: true, entitlement, settings });
+          } catch (err) {
+            sendResponse({ success: false, error: String(err) });
+          }
+        })();
+        return true;
+      }
+
+      case 'GET_DIAGNOSTICS_BUNDLE' as any: {
+        (async () => {
+          try {
+            const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            const settings = await getSettings();
+            const importStatus = await getImportStatus();
+            const queue = await loadQueue();
+            const extensionVersion = chrome.runtime.getManifest?.().version ?? 'unknown';
+            const uiLanguage = chrome.i18n?.getUILanguage?.() ?? 'unknown';
+            const bundle = buildDiagnosticsBundle({
+              extensionVersion,
+              uiLanguage,
+              activeTab: {
+                url: activeTab?.url,
+                title: activeTab?.title,
+              },
+              pageType: (message as any).pageType || inferPageTypeFromUrl(activeTab?.url),
+              settings,
+              importStatus,
+              pendingQueue: queue ? {
+                hasPending: true,
+                currentChunk: queue.currentChunk,
+                totalChunks: queue.chunks.length,
+                pageTitle: queue.pageTitle,
+                remainingUrls: queue.totalUrls - queue.currentChunk * MAX_BATCH_SIZE,
+              } : { hasPending: false },
+            });
+            sendResponse({ success: true, text: formatDiagnosticsBundle(bundle), bundle });
           } catch (err) {
             sendResponse({ success: false, error: String(err) });
           }

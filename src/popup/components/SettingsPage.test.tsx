@@ -34,6 +34,8 @@ describe('SettingsPage entitlement controls', () => {
         onSave={vi.fn()}
         onBack={vi.fn()}
         onRefreshEntitlement={vi.fn()}
+        onCopyDiagnostics={vi.fn()}
+        onReportIssue={vi.fn()}
       />,
     );
 
@@ -53,6 +55,8 @@ describe('SettingsPage entitlement controls', () => {
         onSave={onSave}
         onBack={vi.fn()}
         onRefreshEntitlement={onRefreshEntitlement}
+        onCopyDiagnostics={vi.fn()}
+        onReportIssue={vi.fn()}
       />,
     );
 
@@ -69,5 +73,43 @@ describe('SettingsPage entitlement controls', () => {
       }),
     }));
     await waitFor(() => expect(onRefreshEntitlement).toHaveBeenCalledTimes(1));
+  });
+
+  it('lets the user copy diagnostic information explicitly', async () => {
+    const onCopyDiagnostics = vi.fn(async () => ({ success: true }));
+    render(
+      <SettingsPage
+        settings={makeSettings()}
+        onSave={vi.fn()}
+        onBack={vi.fn()}
+        onRefreshEntitlement={vi.fn()}
+        onCopyDiagnostics={onCopyDiagnostics}
+        onReportIssue={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('settings_copy_diagnostics'));
+
+    await waitFor(() => expect(onCopyDiagnostics).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('settings_diagnostics_copied')).toBeInTheDocument();
+  });
+
+  it('opens a user-controlled issue report email draft', async () => {
+    const onReportIssue = vi.fn(async () => ({ success: true }));
+    render(
+      <SettingsPage
+        settings={makeSettings()}
+        onSave={vi.fn()}
+        onBack={vi.fn()}
+        onRefreshEntitlement={vi.fn()}
+        onCopyDiagnostics={vi.fn()}
+        onReportIssue={onReportIssue}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('settings_report_issue'));
+
+    await waitFor(() => expect(onReportIssue).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('settings_report_issue_opened')).toBeInTheDocument();
   });
 });

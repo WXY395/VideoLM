@@ -14,6 +14,8 @@ import { SettingsPage } from './components/SettingsPage';
 import { NotionExportPanel } from './components/NotionExportPanel';
 import { MAX_BATCH_SIZE } from '@/background/batch-queue';
 import { createVideoSourceRecord } from '@/utils/source-resolution';
+import { formatImportError } from '@/utils/error-guidance';
+import { buildSupportMailtoUrl } from '@/utils/support-mail';
 import './styles.css';
 
 const FREE_MONTHLY_LIMIT = 100;
@@ -162,7 +164,7 @@ export function App() {
           setResult({
             success: false,
             tier: 3,
-            error: response?.error || 'Batch import failed.',
+            error: formatImportError(response?.error || 'Batch import failed.'),
           });
         }
       }
@@ -192,7 +194,7 @@ export function App() {
         setResult({
           success: false,
           tier: 3,
-          error: response?.error || 'Failed to resume batch.',
+          error: formatImportError(response?.error || 'Failed to resume batch.'),
         });
       }
     });
@@ -219,7 +221,7 @@ export function App() {
           setImporting(false);
         } else {
           setImporting(false);
-          setResult({ success: response?.success, tier: 1, message: response?.message, error: response?.error });
+          setResult({ success: response?.success, tier: 1, message: response?.message, error: formatImportError(response?.error) });
         }
       }
     );
@@ -275,7 +277,7 @@ export function App() {
               success: false,
               tier: 3,
               manual: true,
-              error: response?.error || 'Import failed. URL copied to clipboard.',
+              error: formatImportError(response?.error || 'Import failed. URL copied to clipboard.'),
             });
           }
         }
@@ -338,7 +340,7 @@ export function App() {
           setResult({
             success: false,
             tier: 3,
-            error: response?.error || 'Import failed.',
+            error: formatImportError(response?.error || 'Import failed.'),
           });
         }
       }
@@ -355,6 +357,59 @@ export function App() {
     [handleImport]
   );
 
+  const getDiagnosticsText = useCallback(() => {
+    return new Promise<{ success: boolean; text?: string; error?: string }>((resolve) => {
+      safeSendMsg({ type: 'GET_DIAGNOSTICS_BUNDLE', pageType }, async (response) => {
+        if (!response?.success || !response.text) {
+          resolve({ success: false, error: response?.error || 'diagnostics_failed' });
+          return;
+        }
+        resolve({ success: true, text: response.text });
+      });
+    });
+  }, [pageType]);
+
+  const handleCopyDiagnostics = useCallback(async () => {
+    const diagnostics = await getDiagnosticsText();
+    if (!diagnostics.success || !diagnostics.text) {
+      return { success: false, error: diagnostics.error || 'diagnostics_failed' };
+    }
+    try {
+      await navigator.clipboard.writeText(diagnostics.text);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
+  }, [getDiagnosticsText]);
+
+  const handleReportIssue = useCallback(async () => {
+    const diagnostics = await getDiagnosticsText();
+    if (!diagnostics.success || !diagnostics.text) {
+      return { success: false, error: diagnostics.error || 'diagnostics_failed' };
+    }
+
+    const extensionVersion = chrome.runtime.getManifest?.().version ?? 'unknown';
+    const url = buildSupportMailtoUrl({
+      to: 'studiotest187@gmail.com',
+      extensionVersion,
+      diagnosticsText: diagnostics.text,
+    });
+
+    return new Promise<{ success: boolean; error?: string }>((resolve) => {
+      try {
+        chrome.tabs.create({ url }, () => {
+          if (chrome.runtime.lastError) {
+            resolve({ success: false, error: chrome.runtime.lastError.message });
+            return;
+          }
+          resolve({ success: true });
+        });
+      } catch (err) {
+        resolve({ success: false, error: String(err) });
+      }
+    });
+  }, [getDiagnosticsText]);
+
   if (showSettings && settings) {
     return (
       <div className="popup">
@@ -362,6 +417,8 @@ export function App() {
           settings={settings}
           onSave={updateSettings}
           onRefreshEntitlement={refreshEntitlement}
+          onCopyDiagnostics={handleCopyDiagnostics}
+          onReportIssue={handleReportIssue}
           onBack={() => setShowSettings(false)}
         />
       </div>

@@ -268,6 +268,14 @@
     "description": "Help text for output language dropdown"
   },
   "settings_api_hint": { "message": "API 金鑰僅儲存於本機，不會傳送至任何伺服器。" },
+  "settings_support_title": { "message": "支援 Support" },
+  "settings_copy_diagnostics": { "message": "複製診斷資訊 Copy diagnostic info" },
+  "settings_report_issue": { "message": "回報問題 Report issue" },
+  "settings_diagnostics_help": { "message": "複製已遮蔽敏感資料的支援資訊，包含版本、頁面類型、配額摘要與近期匯入狀態；不包含 API 金鑰、授權金鑰或 NotebookLM 內容。" },
+  "settings_diagnostics_copied": { "message": "診斷資訊已複製。" },
+  "settings_diagnostics_failed": { "message": "無法複製診斷資訊。" },
+  "settings_report_issue_opened": { "message": "已開啟 Email 草稿，送出前請先確認內容。" },
+  "settings_report_issue_failed": { "message": "無法開啟 Email 草稿。" },
   "settings_saved": { "message": "已儲存！" },
   "settings_save": { "message": "儲存" },
 

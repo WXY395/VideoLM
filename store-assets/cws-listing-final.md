@@ -82,7 +82,7 @@ VideoLM communicates with YouTube and NotebookLM only to provide the user-facing
 
 SUPPORT
 
-Contact: support@videolm.dev
+Contact: studiotest187@gmail.com
 ```
 
 ---
@@ -152,5 +152,5 @@ The extension processes YouTube URLs, titles, channel names, visible NotebookLM 
 
 Local settings and caches are stored in Chrome storage. License and quota validation may be performed by the VideoLM backend. Optional BYOK API keys are stored locally and used only when the user enables BYOK AI features.
 
-For questions, contact support@videolm.dev.
+For questions, contact studiotest187@gmail.com.
 ```

@@ -414,6 +414,14 @@
     "description": "Help text for output language dropdown"
   },
   "settings_api_hint": { "message": "Your API key is stored locally and never sent to our servers." },
+  "settings_support_title": { "message": "Support" },
+  "settings_copy_diagnostics": { "message": "Copy diagnostic info" },
+  "settings_report_issue": { "message": "Report issue" },
+  "settings_diagnostics_help": { "message": "Copies a redacted support bundle. It includes version, page type, quota summary, and recent import status, but not API keys, license keys, or NotebookLM content." },
+  "settings_diagnostics_copied": { "message": "Diagnostic info copied." },
+  "settings_diagnostics_failed": { "message": "Could not copy diagnostic info." },
+  "settings_report_issue_opened": { "message": "Email draft opened. Please review it before sending." },
+  "settings_report_issue_failed": { "message": "Could not open email draft." },
   "settings_saved": { "message": "Saved!" },
   "settings_save": { "message": "Save" },
 

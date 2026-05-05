@@ -61,7 +61,7 @@ Read the full [Privacy Policy](privacy.html).
 
 ## Contact
 
-- Email: support@videolm.dev
+- Email: studiotest187@gmail.com
 
 ---
 
