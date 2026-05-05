@@ -1,7 +1,7 @@
 # VideoLM - Chrome Web Store Listing
 
-> Draft updated for server entitlement/quota and Pro readiness.
-> Current release package: v0.4.0.
+> Draft updated for support diagnostics, server entitlement/quota, and Pro readiness.
+> Current release package: v0.4.1.
 
 ---
 
@@ -50,6 +50,9 @@ Notion and Obsidian export helpers
 Free and Pro support
   VideoLM uses server-side license and quota validation for the official extension flow. Free users can import up to the monthly quota shown in the extension. Pro users can unlock higher limits and bundled AI features where available.
 
+Support diagnostics
+  If you report an issue, VideoLM opens an email draft with redacted diagnostic information such as extension version, page type, quota summary, and recent import status. You can review and edit the email before sending it.
+
 USE CASES
 
 Researchers
@@ -77,6 +80,8 @@ PRIVACY SUMMARY
 VideoLM does not sell personal data, run ad tracking, or collect analytics.
 
 The extension stores preferences, duplicate cache, source index, optional BYOK API keys, license settings, and quota status in Chrome storage. It may communicate with the VideoLM backend for license validation, quota enforcement, and optional bundled Pro AI features.
+
+If the user chooses to report an issue, VideoLM opens an email draft containing redacted diagnostic information for troubleshooting. The user can review and edit the email before sending it.
 
 VideoLM communicates with YouTube and NotebookLM only to provide the user-facing import/export features. See the full privacy policy for details.
 
@@ -151,6 +156,8 @@ VideoLM does not sell personal data, run ad tracking, or collect analytics.
 The extension processes YouTube URLs, titles, channel names, visible NotebookLM notebook/source/response content, import preferences, export settings, license keys, entitlement tokens, and quota status only to provide its import, export, license, quota, and optional AI features.
 
 Local settings and caches are stored in Chrome storage. License and quota validation may be performed by the VideoLM backend. Optional BYOK API keys are stored locally and used only when the user enables BYOK AI features.
+
+If the user chooses to report an issue, VideoLM opens an email draft with redacted diagnostic information. The user can review and edit the email before sending it.
 
 For questions, contact studiotest187@gmail.com.
 ```

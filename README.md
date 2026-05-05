@@ -57,6 +57,8 @@ VideoLM does not sell personal data, run ad tracking, or collect analytics. The 
 
 For license/quota validation and optional bundled Pro AI, the extension may communicate with the VideoLM backend. YouTube and NotebookLM data is used only to provide the import/export features described in the product.
 
+If you use Report issue, VideoLM opens an email draft with redacted diagnostic information. You can review and edit the email before sending it.
+
 Read the full [Privacy Policy](privacy.html).
 
 ## Contact
