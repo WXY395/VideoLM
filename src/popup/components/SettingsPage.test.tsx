@@ -112,4 +112,19 @@ describe('SettingsPage entitlement controls', () => {
     await waitFor(() => expect(onReportIssue).toHaveBeenCalledTimes(1));
     expect(await screen.findByText('settings_report_issue_opened')).toBeInTheDocument();
   });
+
+  it('offers Gemini as a BYOK provider', () => {
+    render(
+      <SettingsPage
+        settings={makeSettings()}
+        onSave={vi.fn()}
+        onBack={vi.fn()}
+        onRefreshEntitlement={vi.fn()}
+        onCopyDiagnostics={vi.fn()}
+        onReportIssue={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('settings_provider_gemini')).toBeInTheDocument();
+  });
 });

@@ -1,7 +1,8 @@
 import type { UserSettings } from '@/types';
+import { DEFAULT_BACKEND_URL, migrateBackendUrl } from '@/config/backend';
 
 export const STORAGE_KEY = 'videolm_settings';
-export const DEFAULT_BACKEND_URL = 'https://api.videolm.workers.dev';
+export { DEFAULT_BACKEND_URL };
 
 const FREE_IMPORT_LIMIT = 100;
 const FREE_BYOK_IMPORT_LIMIT = 300;
@@ -80,6 +81,12 @@ export async function getSettings(): Promise<UserSettings> {
     entitlement: { ...defaultSettings.entitlement! },
     monthlyUsage: { ...defaultSettings.monthlyUsage, resetDate: getFirstOfNextMonth() },
   };
+
+  const migratedBackendUrl = migrateBackendUrl(settings.entitlement?.backendUrl);
+  if (settings.entitlement && settings.entitlement.backendUrl !== migratedBackendUrl) {
+    settings.entitlement.backendUrl = migratedBackendUrl;
+    await saveSettings(settings);
+  }
 
   // Auto-reset monthly usage if past resetDate
   const now = new Date();

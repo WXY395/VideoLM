@@ -1,6 +1,7 @@
 import type { AIProvider, UserSettings } from '@/types';
 import { OpenAIDirectProvider } from './providers/openai-direct';
 import { AnthropicDirectProvider } from './providers/anthropic-direct';
+import { GeminiDirectProvider } from './providers/gemini-direct';
 import { BuiltinProvider } from './providers/builtin';
 import { NoAIProvider } from './providers/no-ai';
 
@@ -23,6 +24,10 @@ export function resolveProvider(settings: UserSettings, authToken?: string): AIP
 
     if (provider === 'anthropic') {
       return new AnthropicDirectProvider(apiKey, model);
+    }
+
+    if (provider === 'gemini') {
+      return new GeminiDirectProvider(apiKey, model);
     }
   }
 

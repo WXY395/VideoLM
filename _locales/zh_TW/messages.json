@@ -110,6 +110,7 @@
   "notif_error_title": { "message": "VideoLM 錯誤" },
 
   "error_quota_exceeded": { "message": "已超過每月匯入配額。" },
+  "error_quota_unavailable": { "message": "無法驗證匯入配額，請到設定重新整理方案或檢查 Backend URL。" },
   "error_ai_requires_key": { "message": "AI 處理需要 API 金鑰或 VideoLM Pro。" },
   "error_no_urls": { "message": "未提供任何 URL。" },
   "error_cannot_autocreate": { "message": "無法自動建立筆記本，請先開啟 NotebookLM 再試一次。" },
@@ -248,6 +249,7 @@
   "settings_provider": { "message": "AI 提供者" },
   "settings_provider_openai": { "message": "OpenAI" },
   "settings_provider_anthropic": { "message": "Anthropic" },
+  "settings_provider_gemini": { "message": "Google Gemini" },
   "settings_api_key": { "message": "API 金鑰" },
   "settings_model": { "message": "模型（選填）" },
   "settings_dup_strategy": { "message": "同名筆記本存在時" },

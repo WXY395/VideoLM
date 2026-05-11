@@ -1,7 +1,7 @@
 # VideoLM - Chrome Web Store Listing
 
-> Draft updated for support diagnostics, server entitlement/quota, and Pro readiness.
-> Current release package: v0.4.1.
+> Draft updated for Gemini BYOK, branded backend URL migration, support diagnostics, server entitlement/quota, and Pro readiness.
+> Current release package: v0.4.3 approved.
 
 ---
 
@@ -50,6 +50,9 @@ Notion and Obsidian export helpers
 Free and Pro support
   VideoLM uses server-side license and quota validation for the official extension flow. Free users can import up to the monthly quota shown in the extension. Pro users can unlock higher limits and bundled AI features where available.
 
+Optional BYOK AI
+  Users can provide their own OpenAI, Anthropic, or Google Gemini API key for optional AI features. BYOK keys are stored locally in Chrome storage and used only when the user enables those features.
+
 Support diagnostics
   If you report an issue, VideoLM opens an email draft with redacted diagnostic information such as extension version, page type, quota summary, and recent import status. You can review and edit the email before sending it.
 
@@ -79,7 +82,7 @@ PRIVACY SUMMARY
 
 VideoLM does not sell personal data, run ad tracking, or collect analytics.
 
-The extension stores preferences, duplicate cache, source index, optional BYOK API keys, license settings, and quota status in Chrome storage. It may communicate with the VideoLM backend for license validation, quota enforcement, and optional bundled Pro AI features.
+The extension stores preferences, duplicate cache, source index, optional BYOK API keys, license settings, and quota status in Chrome storage. It may communicate with the VideoLM backend at videolm-api.videolm.workers.dev for license validation, quota enforcement, and optional bundled Pro AI features. Existing installs using older backend URLs are migrated locally to this branded workers.dev endpoint. Optional BYOK AI calls are made only when enabled by the user.
 
 If the user chooses to report an issue, VideoLM opens an email draft containing redacted diagnostic information for troubleshooting. The user can review and edit the email before sending it.
 
@@ -148,6 +151,18 @@ Required to read supported YouTube pages and collect the URLs/titles selected by
 Required to submit selected YouTube URLs into NotebookLM and provide Notion/Obsidian export helpers on NotebookLM responses.
 ```
 
+### Host permission - videolm-api.videolm.workers.dev
+
+```text
+Required to contact the VideoLM backend for license validation, quota enforcement, entitlement checks, and optional bundled Pro AI features.
+```
+
+### Host permission - generativelanguage.googleapis.com
+
+```text
+Required only when the user enables Gemini BYOK AI features to call the selected Google Gemini model with the user-provided API key.
+```
+
 ## Privacy Policy Summary
 
 ```text
@@ -155,7 +170,7 @@ VideoLM does not sell personal data, run ad tracking, or collect analytics.
 
 The extension processes YouTube URLs, titles, channel names, visible NotebookLM notebook/source/response content, import preferences, export settings, license keys, entitlement tokens, and quota status only to provide its import, export, license, quota, and optional AI features.
 
-Local settings and caches are stored in Chrome storage. License and quota validation may be performed by the VideoLM backend. Optional BYOK API keys are stored locally and used only when the user enables BYOK AI features.
+Local settings and caches are stored in Chrome storage. License and quota validation may be performed by the VideoLM backend at videolm-api.videolm.workers.dev. Older backend URLs may be migrated locally to this branded endpoint. Optional BYOK API keys are stored locally and used only when the user enables BYOK AI features.
 
 If the user chooses to report an issue, VideoLM opens an email draft with redacted diagnostic information. The user can review and edit the email before sending it.
 

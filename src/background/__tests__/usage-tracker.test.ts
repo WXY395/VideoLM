@@ -39,6 +39,7 @@ const {
   checkQuota,
   STORAGE_KEY,
   defaultSettings,
+  DEFAULT_BACKEND_URL,
 } =
   await import('../usage-tracker');
 
@@ -74,6 +75,7 @@ describe('usage-tracker', () => {
       const settings = await getSettings();
       expect(settings.tier).toBe('free');
       expect(settings.defaultMode).toBe('raw');
+      expect(settings.entitlement?.backendUrl).toBe(DEFAULT_BACKEND_URL);
       expect(settings.monthlyUsage.imports).toBe(0);
       expect(settings.monthlyUsage.aiCalls).toBe(0);
     });
@@ -104,6 +106,37 @@ describe('usage-tracker', () => {
       const now = new Date();
       const resetLocal = new Date(y, m - 1, 1);
       expect(resetLocal > now).toBe(true);
+    });
+
+    it.each([
+      'https://api.videolm.workers.dev',
+      'https://api.videolm.workers.dev/',
+      'https://videolm-api.a0970292729.workers.dev',
+      'https://videolm-api.a0970292729.workers.dev/',
+    ])('migrates legacy backend URL %s to the branded workers.dev URL', async (legacyUrl) => {
+      storageData[STORAGE_KEY] = makeSettings({
+        entitlement: {
+          backendUrl: legacyUrl,
+        },
+      });
+
+      const settings = await getSettings();
+
+      expect(settings.entitlement?.backendUrl).toBe(DEFAULT_BACKEND_URL);
+      const persisted = storageData[STORAGE_KEY] as UserSettings;
+      expect(persisted.entitlement?.backendUrl).toBe(DEFAULT_BACKEND_URL);
+    });
+
+    it('keeps a custom backend URL while normalizing trailing slashes', async () => {
+      storageData[STORAGE_KEY] = makeSettings({
+        entitlement: {
+          backendUrl: 'https://api.example.test/',
+        },
+      });
+
+      const settings = await getSettings();
+
+      expect(settings.entitlement?.backendUrl).toBe('https://api.example.test');
     });
   });
 

@@ -36,6 +36,20 @@ interface ProgressItem {
   status: ProgressStatus;
 }
 
+interface StoredImportStatus {
+  active: boolean;
+  pageTitle: string;
+  totalUrls: number;
+  importedCount: number;
+  phase: string;
+  startedAt: number;
+  lastError?: string;
+  completed?: boolean;
+  completionMessage?: string;
+  needsNewNotebook?: boolean;
+  remainingCount?: number;
+}
+
 export function App() {
   const { content, loading: contentLoading, error: contentError, batchUrls, pageType, pageTitle } = useVideoContent();
   const { settings, updateSettings, refreshEntitlement } = useSettings();
@@ -45,6 +59,7 @@ export function App() {
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState<{ items: ProgressItem[]; completed: number; total: number } | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [activeImportMessage, setActiveImportMessage] = useState<string | null>(null);
   const [duplicateTitle, setDuplicateTitle] = useState<string | null>(null);
   const [pendingQueue, setPendingQueue] = useState<{ remaining: number; pageTitle: string } | null>(null);
   const [lastClipboardText, setLastClipboardText] = useState<string | null>(null);
@@ -69,28 +84,63 @@ export function App() {
     ? FREE_MONTHLY_LIMIT - (settings.monthlyUsage?.imports ?? 0)
     : undefined;
 
+  const applyImportStatus = useCallback((status: StoredImportStatus | null | undefined): boolean => {
+    if (!status) return false;
+
+    if (status.active) {
+      setImporting(true);
+      setActiveImportMessage(status.phase || t('common_importing'));
+      return false;
+    }
+
+    setImporting(false);
+    setActiveImportMessage(null);
+
+    if (status.completed || status.lastError || status.completionMessage) {
+      setResult({
+        success: !status.lastError,
+        tier: 1,
+        message: status.completionMessage,
+        error: status.lastError ? formatImportError(status.lastError) : undefined,
+        manual: status.needsNewNotebook,
+      } as any);
+      return true;
+    }
+
+    return false;
+  }, []);
+
+  const startImportStatusPolling = useCallback(() => {
+    let attempts = 0;
+    const timer = window.setInterval(() => {
+      attempts += 1;
+      safeSendMsg({ type: 'GET_IMPORT_STATUS' }, (status) => {
+        const done = applyImportStatus(status as StoredImportStatus | null);
+        if (done || attempts >= 120) {
+          window.clearInterval(timer);
+          if (!done && attempts >= 120) {
+            setImporting(false);
+            setActiveImportMessage(null);
+            setResult({
+              success: false,
+              tier: 3,
+              error: formatImportError('Import status timed out. Refresh YouTube or NotebookLM, then retry.'),
+            });
+          }
+        }
+      });
+    }, 1000);
+  }, [applyImportStatus]);
+
   // Check for import status + pending queue on popup open
   // L-3 FIX: Removed unused importStatus state — status is only used for side effects
 
   useEffect(() => {
     // Check if there's an active or completed import
-    safeSendMsg({ type: 'GET_IMPORT_STATUS' }, (status) => {
+    safeSendMsg({ type: 'GET_IMPORT_STATUS' }, (status: StoredImportStatus | null) => {
       if (status) {
-        // If import is active, show as importing
-        if (status.active) {
-          setImporting(true);
-        }
-        // If completed with result, show the result
-        if (status.completed && status.completionMessage) {
-          setResult({
-            success: !status.lastError,
-            tier: 1,
-            message: status.completionMessage,
-            error: status.lastError,
-            manual: status.needsNewNotebook,
-          } as any);
-        }
-        // If needs new notebook, show resume prompt
+        const done = applyImportStatus(status);
+        if (status.active && !done) startImportStatusPolling();
         if (status.needsNewNotebook && status.remainingCount) {
           setPendingQueue({ remaining: status.remainingCount, pageTitle: status.pageTitle });
         }
@@ -111,11 +161,12 @@ export function App() {
         setPendingQueue({ remaining: response.remainingUrls, pageTitle: response.pageTitle || 'Batch Import' });
       }
     });
-  }, []);
+  }, [applyImportStatus, startImportStatusPolling]);
 
   const handleBatchImport = useCallback((urls: string[]) => {
     setImporting(true);
     setResult(null);
+    setActiveImportMessage(null);
     setProgress(null);
 
     const items: ProgressItem[] = urls.map((_url, i) => ({
@@ -251,12 +302,18 @@ export function App() {
           videoTitle: content.title,
         },
         async (response) => {
-          setImporting(false);
-
           // Always copy URL to clipboard (for fallback manual paste)
           if (response?.clipboardText) {
             try { await navigator.clipboard.writeText(response.clipboardText); } catch {}
           }
+
+          if (response?.importing) {
+            setActiveImportMessage(response.message || t('common_importing'));
+            startImportStatusPolling();
+            return;
+          }
+
+          setImporting(false);
 
           if (response?.success) {
             // Store source record for citation resolution
@@ -562,6 +619,12 @@ export function App() {
               {result.success
                 ? result.message ?? t('popup_imported_success')
                 : result.error ?? t('popup_import_failed')}
+            </div>
+          )}
+
+          {activeImportMessage && !result && (
+            <div className="status-message status-message--info">
+              {activeImportMessage}
             </div>
           )}
 

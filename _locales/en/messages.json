@@ -189,6 +189,10 @@
     "message": "Monthly import quota exceeded.",
     "description": "Error when quota is reached"
   },
+  "error_quota_unavailable": {
+    "message": "Could not verify import quota. Refresh your plan in Settings or check the Backend URL.",
+    "description": "Error when quota validation cannot be completed"
+  },
   "error_ai_requires_key": {
     "message": "AI processing requires a BYOK API key or VideoLM Pro.",
     "description": "Error when AI feature requires key"
@@ -394,6 +398,7 @@
   "settings_provider": { "message": "AI Provider" },
   "settings_provider_openai": { "message": "OpenAI" },
   "settings_provider_anthropic": { "message": "Anthropic" },
+  "settings_provider_gemini": { "message": "Google Gemini" },
   "settings_api_key": { "message": "API Key" },
   "settings_model": { "message": "Model (optional)" },
   "settings_dup_strategy": { "message": "When a same-name notebook exists" },

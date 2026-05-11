@@ -1,7 +1,6 @@
 import type { AIProvider, Chapter, ImportMode, TranscriptSegment } from '@/types';
+import { DEFAULT_BACKEND_URL } from '@/config/backend';
 import { normalizeChapters, type RawChapter } from '../normalize-chapters';
-
-const DEFAULT_BACKEND_URL = 'https://api.videolm.workers.dev';
 
 export class BuiltinProvider implements AIProvider {
   readonly name = 'builtin';

@@ -14,6 +14,7 @@ interface SettingsPageProps {
 const DEFAULT_MODELS: Record<string, string> = {
   openai: 'gpt-4o-mini',
   anthropic: 'claude-sonnet-4-20250514',
+  gemini: 'gemini-2.5-flash-lite',
 };
 
 export function SettingsPage({
@@ -174,7 +175,7 @@ export function SettingsPage({
           type="text"
           value={backendUrl}
           onChange={(e) => setBackendUrl(e.target.value)}
-          placeholder="https://api.videolm.workers.dev"
+          placeholder="https://videolm-api.videolm.workers.dev"
         />
         <p className="settings-help">{t('settings_backend_url_help')}</p>
       </div>
@@ -201,6 +202,7 @@ export function SettingsPage({
         >
           <option value="openai">{t('settings_provider_openai')}</option>
           <option value="anthropic">{t('settings_provider_anthropic')}</option>
+          <option value="gemini">{t('settings_provider_gemini')}</option>
         </select>
       </div>
 

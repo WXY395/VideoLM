@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "__MSG_ext_name__",
-  "version": "0.4.1",
+  "version": "0.4.3",
   "description": "__MSG_ext_description__",
   "default_locale": "en",
   "permissions": [
@@ -13,7 +13,9 @@
   ],
   "host_permissions": [
     "https://notebooklm.google.com/*",
-    "https://www.youtube.com/*"
+    "https://www.youtube.com/*",
+    "https://videolm-api.videolm.workers.dev/*",
+    "https://generativelanguage.googleapis.com/*"
   ],
   "background": {
     "service_worker": "src/background/service-worker.ts",

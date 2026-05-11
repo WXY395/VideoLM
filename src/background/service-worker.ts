@@ -418,11 +418,14 @@ async function importUrlsToNlm(
   const validUrls = urls.filter(Boolean);
   const remoteQuota = await reserveEntitledQuota('imports', validUrls.length);
   if (!remoteQuota.allowed) {
+    const quotaError = remoteQuota.error === 'quota_exceeded'
+      ? t('error_quota_exceeded')
+      : t('error_quota_unavailable');
     return {
       success: false,
       clipboardText: urls.join('\n'),
       urlCount,
-      error: t('error_quota_exceeded'),
+      error: quotaError,
       notebookId,
       authuser,
     };
@@ -1322,14 +1325,16 @@ chrome.runtime.onMessage.addListener(
 
       case 'QUICK_IMPORT': {
         (async () => {
+          let videoTitle = '';
+          let urls: string[] = [];
           try {
             // Set toast tab to the active YouTube tab
             const [ytTab] = await chrome.tabs.query({ active: true, currentWindow: true });
             if (ytTab?.id) setToastTab(ytTab.id);
 
             const rawVideoUrl = (message as any).videoUrl as string | string[];
-            const videoTitle = (message as any).videoTitle as string | undefined;
-            const urls = Array.isArray(rawVideoUrl) ? rawVideoUrl : [rawVideoUrl];
+            videoTitle = ((message as any).videoTitle as string | undefined) || '';
+            urls = Array.isArray(rawVideoUrl) ? rawVideoUrl : [rawVideoUrl];
 
             await showToast({
               state: 'importing',
@@ -1391,11 +1396,22 @@ chrome.runtime.onMessage.addListener(
               }
             }
 
+            const validImportUrls = urls.filter(Boolean);
+            const quickImportStartedAt = Date.now();
+            await setImportStatus({
+              active: true,
+              pageTitle: videoTitle || 'Video',
+              totalUrls: validImportUrls.length,
+              importedCount: 0,
+              phase: t('toast_importing_video', [videoTitle || 'video']),
+              startedAt: quickImportStartedAt,
+            });
+
             // C-2 FIX: Send response immediately so popup doesn't freeze
-            sendResponse({ success: true, importing: true, message: `Importing "${videoTitle || 'video'}"...` });
+            sendResponse({ success: true, importing: true, message: t('toast_importing_video', [videoTitle || 'video']) });
 
             const result = await importUrlsToNlm(
-              urls.filter(Boolean),
+              validImportUrls,
               targetNbId,
               targetAuth,
               targetNbId ? undefined : videoTitle,
@@ -1405,12 +1421,44 @@ chrome.runtime.onMessage.addListener(
             );
 
             // Post-import: refresh NLM tab + toast + notification
-            if (result.success && result.notebookId) {
-              await postImportActions(result.notebookId, result.authuser || '', urls.length, videoTitle || 'Video');
+            if (result.success) {
+              await setImportStatus({
+                active: false,
+                pageTitle: videoTitle || 'Video',
+                totalUrls: validImportUrls.length,
+                importedCount: result.urlCount || validImportUrls.length,
+                phase: 'Complete',
+                startedAt: quickImportStartedAt,
+                completed: true,
+                completionMessage: result.message || t('msg_single_added'),
+              });
+              if (result.notebookId) {
+                await postImportActions(result.notebookId, result.authuser || '', validImportUrls.length, videoTitle || 'Video');
+              }
             } else if (!result.success) {
+              await setImportStatus({
+                active: false,
+                pageTitle: videoTitle || 'Video',
+                totalUrls: validImportUrls.length,
+                importedCount: 0,
+                phase: 'Failed',
+                startedAt: quickImportStartedAt,
+                completed: true,
+                lastError: result.error || t('error_api_failed'),
+              });
               await showToast({ state: 'error', text: t('toast_import_failed', [result.error || '']) });
             }
           } catch (err) {
+            await setImportStatus({
+              active: false,
+              pageTitle: videoTitle || 'Video',
+              totalUrls: urls.filter(Boolean).length,
+              importedCount: 0,
+              phase: 'Failed',
+              startedAt: Date.now(),
+              completed: true,
+              lastError: String(err),
+            });
             await showToast({ state: 'error', text: t('toast_import_failed', [String(err)]) });
           }
         })();

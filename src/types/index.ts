@@ -88,7 +88,7 @@ export interface AIProvider {
 }
 
 /** Available AI provider backends */
-export type AIProviderType = 'gemini-nano' | 'openai' | 'anthropic' | 'none';
+export type AIProviderType = 'gemini-nano' | 'openai' | 'anthropic' | 'gemini' | 'none';
 
 /** Bring-your-own-key configuration */
 export interface BYOKConfig {

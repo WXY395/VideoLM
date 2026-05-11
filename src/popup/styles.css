@@ -323,6 +323,11 @@ body {
   color: #137333;
 }
 
+.status-message--info {
+  background: #e8f0fe;
+  color: #174ea6;
+}
+
 .status-message--error {
   background: #fce8e6;
   color: #c5221f;

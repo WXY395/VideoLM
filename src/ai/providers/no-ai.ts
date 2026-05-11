@@ -22,7 +22,7 @@ export class NoAIProvider implements AIProvider {
 
   async translate(content: string, _targetLang: string): Promise<string> {
     console.error(
-      '[VideoLM] Translation requires an AI provider. Please configure a BYOK API key (OpenAI or Anthropic) in the extension settings, or upgrade to VideoLM Pro.',
+      '[VideoLM] Translation requires an AI provider. Please configure a BYOK API key (OpenAI, Anthropic, or Google Gemini) in the extension settings, or upgrade to VideoLM Pro.',
     );
     return content;
   }

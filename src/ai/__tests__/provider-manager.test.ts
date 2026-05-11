@@ -36,6 +36,15 @@ describe('resolveProvider', () => {
     expect(provider.name).toBe('anthropic-direct');
   });
 
+  it('returns Gemini when BYOK with gemini key', () => {
+    const provider = resolveProvider(
+      makeSettings({
+        byok: { provider: 'gemini', apiKey: 'gemini-test-key' },
+      }),
+    );
+    expect(provider.name).toBe('gemini-direct');
+  });
+
   it('returns builtin for pro tier with auth token', () => {
     const provider = resolveProvider(makeSettings({ tier: 'pro' }), 'auth-token-123');
     expect(provider.name).toBe('builtin');

@@ -41,7 +41,7 @@ VideoLM bridges YouTube and Google NotebookLM. It adds a NotebookLM button direc
 
 Free users can import up to the monthly quota shown in the extension. Pro users can unlock higher limits and bundled AI processing where available. License and quota validation is handled by the VideoLM backend for the official extension flow.
 
-Bring-your-own-key AI remains optional. If you enter your own OpenAI or Anthropic API key, it is stored locally in Chrome storage and used directly from your browser.
+Bring-your-own-key AI remains optional. If you enter your own OpenAI, Anthropic, or Google Gemini API key, it is stored locally in Chrome storage and used directly from your browser.
 
 ## Supported Pages
 
@@ -55,7 +55,7 @@ Bring-your-own-key AI remains optional. If you enter your own OpenAI or Anthropi
 
 VideoLM does not sell personal data, run ad tracking, or collect analytics. The extension stores import preferences, duplicate cache, source index, optional BYOK API keys, and license settings in Chrome storage.
 
-For license/quota validation and optional bundled Pro AI, the extension may communicate with the VideoLM backend. YouTube and NotebookLM data is used only to provide the import/export features described in the product.
+For license/quota validation and optional bundled Pro AI, the extension may communicate with the VideoLM backend at `https://videolm-api.videolm.workers.dev`. Existing installs using older backend URLs are migrated to the branded `workers.dev` endpoint when settings are loaded. YouTube and NotebookLM data is used only to provide the import/export features described in the product.
 
 If you use Report issue, VideoLM opens an email draft with redacted diagnostic information. You can review and edit the email before sending it.
 
