@@ -69,3 +69,11 @@ Required to contact the VideoLM backend for license validation, quota enforcemen
 
 - This release changes only the disclosed/default backend domain and local settings migration around the backend endpoint.
 - The old backend URLs may still appear in the built service worker only as legacy-settings migration strings.
+
+## Post-Approval Closure
+
+- CWS public page check on 2026-05-11 returned HTTP 200 and included `0.4.3`.
+- Installed Chrome extension check on 2026-05-11 found `Default\Extensions\fceedhmcaeenaappocciedinlainehfm\0.4.3_0\manifest.json` with manifest version `0.4.3`.
+- Installed bundle URL check found `videolm-api.videolm.workers.dev` plus the two legacy migration URLs in built JS.
+- Installed CWS manifest did not include `https://videolm-api.videolm.workers.dev/*`; it included NotebookLM, YouTube, and Gemini host permissions. Backend CORS preflight for `chrome-extension://fceedhmcaeenaappocciedinlainehfm` returned `204` with `Access-Control-Allow-Origin` set to the extension origin.
+- Follow-up decision for v0.4.4: decide whether to keep backend communication CORS-only to avoid an extra host permission prompt, or submit an explicit backend host permission for stricter extension permission alignment.
